@@ -24,6 +24,8 @@ let ME = null;        // current member code
 let NOTIFS = [];      // in-app notifications (all members; filtered to ME on render)
 let demoSeq = 0;
 let currentProject = null, currentTask = null, currentFilter = 'active', currentView = 'dashboard';
+let FILT = { board:{a:'',pr:''}, proj:{motion:'',owner:'',segment:''}, cal:{a:'',proj:''} };
+let calY = TODAY.getFullYear(), calM = TODAY.getMonth();
 
 /* ---------- Helpers ---------- */
 const byId = id => PROJECTS.find(p => p.id === id);
@@ -165,7 +167,16 @@ function renderDashboard(){
    =================================================================== */
 function renderProjects(filter){
   filter=filter||'active';
-  const list = PROJECTS.filter(p=> filter==='all'?true : filter==='active'?p.status==='active' : filter==='planning'?(p.status==='planning'||p.status==='review') : p.status==='complete');
+  // segment options reflect actual data; preserve current selection
+  const segSel=document.getElementById('proj-fs');
+  const segs=[...new Set(PROJECTS.map(p=>p.segment).filter(Boolean))].sort();
+  segSel.innerHTML = `<option value="">All segments</option>`+segs.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  segSel.value = segs.includes(FILT.proj.segment) ? FILT.proj.segment : (FILT.proj.segment='', '');
+  ['proj-fm','proj-fo','proj-fs'].forEach((id,ix)=>document.getElementById(id).classList.toggle('on',!!Object.values(FILT.proj)[ix]));
+  const list = PROJECTS.filter(p=> filter==='all'?true : filter==='active'?p.status==='active' : filter==='planning'?(p.status==='planning'||p.status==='review') : p.status==='complete')
+    .filter(p=>!FILT.proj.motion || p.motion===FILT.proj.motion)
+    .filter(p=>!FILT.proj.owner || ownerOf(p)===FILT.proj.owner)
+    .filter(p=>!FILT.proj.segment || p.segment===FILT.proj.segment);
   document.getElementById('proj-grid').innerHTML = list.map(p=>{
     const pr=progress(p), stKey=projStatus(p), st=STATUS_PILL[stKey];
     return `<div class="pcard t-${stKey}" onclick="openProject('${p.id}')">
@@ -433,8 +444,12 @@ function renderBoard(id){
   id=id||picker.value||(PROJECTS[0]&&PROJECTS[0].id);
   const p=byId(id); if(!p){ document.getElementById('board').innerHTML=''; return; }
   picker.value=id;
+  document.getElementById('board-fa').classList.toggle('on',!!FILT.board.a);
+  document.getElementById('board-fp').classList.toggle('on',!!FILT.board.pr);
   document.getElementById('board').innerHTML = ORDER.map(s=>{
-    const items=p.tasks.map((t,idx)=>({t,idx})).filter(o=>o.t.s===s);
+    const items=p.tasks.map((t,idx)=>({t,idx})).filter(o=>o.t.s===s)
+      .filter(o=>!FILT.board.a || o.t.a===FILT.board.a)
+      .filter(o=>!FILT.board.pr || o.t.pr===FILT.board.pr);
     return `<div class="col" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropCard(event,'${p.id}','${s}')"><div class="col-h"><span class="dot" style="background:${STATUS[s].dot}"></span><span class="name">${STATUS[s].label}</span><span class="n num">${items.length}</span></div>${items.map(({t,idx})=>`
       <div class="kanban" draggable="true" ondragstart="dragStart(event,'${p.id}',${idx})" ondragend="dragEnd(event)" onclick="cardClick('${p.id}',${idx})" ${s==='blocked'?'style="border-color:color-mix(in srgb, var(--crit) 40%, var(--line))"':''}>
         <div class="kt">${esc(t.t)}</div>
@@ -487,6 +502,61 @@ function renderRoadblocks(){
 }
 
 /* ===================================================================
+   RENDER — Calendar
+   =================================================================== */
+const MONTHS_FULL=['January','February','March','April','May','June','July','August','September','October','November','December'];
+function calShift(n){ calM+=n; if(calM<0){calM=11;calY--;} if(calM>11){calM=0;calY++;} renderCalendar(); }
+function calToday(){ calY=TODAY.getFullYear(); calM=TODAY.getMonth(); renderCalendar(); }
+function renderCalendar(){
+  // campaign filter options reflect current data; preserve selection
+  const fp=document.getElementById('cal-fp');
+  fp.innerHTML = `<option value="">All campaigns</option>`+PROJECTS.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  fp.value = byId(FILT.cal.proj) ? FILT.cal.proj : (FILT.cal.proj='', '');
+  document.getElementById('cal-fa').classList.toggle('on',!!FILT.cal.a);
+  fp.classList.toggle('on',!!FILT.cal.proj);
+  document.getElementById('cal-title').textContent = `${MONTHS_FULL[calM]} ${calY}`;
+
+  // index tasks by due date string (respecting filters)
+  const byDue={};
+  PROJECTS.forEach(p=>p.tasks.forEach((t,i)=>{
+    if(!t.due) return;
+    if(FILT.cal.a && t.a!==FILT.cal.a) return;
+    if(FILT.cal.proj && p.id!==FILT.cal.proj) return;
+    (byDue[t.due]=byDue[t.due]||[]).push({p,t,i});
+  }));
+
+  const pad=n=>String(n).padStart(2,'0');
+  const todayStr = `${TODAY.getFullYear()}-${pad(TODAY.getMonth()+1)}-${pad(TODAY.getDate())}`;
+  const startDow = new Date(calY,calM,1).getDay();
+  const daysInMonth = new Date(calY,calM+1,0).getDate();
+  const cells = Math.ceil((startDow+daysInMonth)/7)*7;
+  let html='';
+  for(let c=0;c<cells;c++){
+    const d = new Date(calY,calM,c-startDow+1);
+    const ds = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    const other = d.getMonth()!==calM;
+    const items = byDue[ds]||[];
+    html += `<div class="cal-cell${other?' other':''}${ds===todayStr?' today':''}">
+      <div class="cal-date">${d.getDate()}</div>
+      ${items.map(({p,t,i})=>{
+        const over = ds<todayStr && t.s!=='done';
+        return `<div class="cal-chip${t.s==='done'?' done':''}${over?' over':''}" onclick="openTask('${p.id}',${i})" title="${esc(t.t)} — ${esc(p.name)} · ${esc(teamName(t.a))}"><span class="cdot" style="background:${over?'var(--crit)':STATUS[t.s].dot}"></span><span class="ct">${esc(t.t)}</span></div>`;
+      }).join('')}
+    </div>`;
+  }
+  document.getElementById('cal-grid').innerHTML = html;
+}
+
+/* ---------- Filter select options (members are static per session) ---------- */
+function fillFilterOptions(){
+  const mem = k => Object.keys(TEAM).map(c=>`<option value="${c}">${esc(TEAM[c].name)}</option>`).join('');
+  document.getElementById('board-fa').innerHTML = `<option value="">All assignees</option>`+mem();
+  document.getElementById('cal-fa').innerHTML   = `<option value="">All assignees</option>`+mem();
+  document.getElementById('proj-fo').innerHTML  = `<option value="">All owners</option>`+mem();
+  document.getElementById('board-fa').value=FILT.board.a; document.getElementById('cal-fa').value=FILT.cal.a; document.getElementById('proj-fo').value=FILT.proj.owner;
+}
+
+/* ===================================================================
    Search
    =================================================================== */
 function runSearch(q){
@@ -513,7 +583,7 @@ document.addEventListener('click',e=>{ if(!e.target.closest('.search')) document
 /* ===================================================================
    Navigation
    =================================================================== */
-const titles = { dashboard:['Dashboard','Demand Gen campaign portfolio'], mytasks:['My Tasks',"Everything assigned to you, grouped by when it's due"], board:['Board','Kanban view · drag tasks across stages'], projects:['Campaigns','All Demand Gen campaigns and their progress'], project:['Campaign','Tasks, owner & assignments'], roadblocks:['Roadblocks','Tasks blocked by upstream work or inputs'] };
+const titles = { dashboard:['Dashboard','Demand Gen campaign portfolio'], mytasks:['My Tasks',"Everything assigned to you, grouped by when it's due"], board:['Board','Kanban view · drag tasks across stages'], projects:['Campaigns','All Demand Gen campaigns and their progress'], project:['Campaign','Tasks, owner & assignments'], calendar:['Calendar','Every task on its due date'], roadblocks:['Roadblocks','Tasks blocked by upstream work or inputs'] };
 function show(view){
   currentView=view;
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
@@ -526,6 +596,7 @@ function show(view){
   if(view==='mytasks') renderMyTasks();
   if(view==='board') renderBoard();
   if(view==='projects') renderProjects(currentFilter);
+  if(view==='calendar') renderCalendar();
   if(view==='roadblocks') renderRoadblocks();
   window.scrollTo(0,0);
 }
@@ -698,7 +769,7 @@ async function afterLogin(){
   hideAuth();
   try { await loadLive(); } catch(_){ return; }
   await resolveMe();
-  renderMe(); renderBoardPicker(); refreshCounts(); renderBell(); show('dashboard');
+  renderMe(); renderBoardPicker(); fillFilterOptions(); refreshCounts(); renderBell(); show('dashboard');
   subscribeRealtime();
   if(!PROJECTS.length) document.getElementById('seed-banner').style.display='flex';
 }
@@ -718,7 +789,7 @@ async function boot(){
   } else {
     buildFromSeed();
     await resolveMe();
-    renderMe(); renderBoardPicker(); refreshCounts(); renderBell(); show('dashboard');
+    renderMe(); renderBoardPicker(); fillFilterOptions(); refreshCounts(); renderBell(); show('dashboard');
   }
 }
 document.addEventListener('DOMContentLoaded', boot);

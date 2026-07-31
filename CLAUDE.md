@@ -65,7 +65,12 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   `blocked_by` text = external blocker); drag-and-drop board; in-app notifications
   (bell, `notifications` table); computed pipeline KPI (`parseValue`) + open-work
   breakdown; working global search. Requires `db/upgrade-tier1.sql` on existing DBs.
-- Nav stubs: Calendar and Timeline ("soon").
-- Possible next (Tier 2/3): calendar view, campaign templates, Supabase Storage file
-  uploads, filters, password-reset UI, email digest (needs Edge Function), WordPress
-  read-only dashboard, Excel export, per-role permissions.
+- **Tier 2 partial (2026-07-31):** Calendar view (month grid keyed on task `due`
+  strings — compare as YYYY-MM-DD strings, no Date TZ math; chips colored by status,
+  overdue red, click opens drawer) and filters (`FILT` state: board by
+  assignee/priority, campaigns by motion/owner/segment, calendar by
+  assignee/campaign). Pure front-end, no schema change.
+- Nav stub remaining: Timeline ("soon").
+- Possible next (Tier 2/3): campaign templates, Supabase Storage file uploads,
+  password-reset UI, email digest (needs Edge Function), WordPress read-only
+  dashboard, Excel export, per-role permissions, Timeline/Gantt.

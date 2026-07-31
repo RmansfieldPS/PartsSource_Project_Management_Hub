@@ -45,6 +45,7 @@ function denyEdit(){ toast("Only the assignee or an admin can change this task",
 function upstreamOf(p,t){ return t.bt ? p.tasks.find(x=>x.id===t.bt) : null; }
 function blockedLabel(p,t){ const u=upstreamOf(p,t); return u ? u.t : (t.blockedBy||''); }
 function fmtMoney(n){ if(n>=1e6) return '$'+(n/1e6).toFixed(n>=1e7?0:1)+'M'; if(n>=1e3) return '$'+Math.round(n/1e3)+'K'; return '$'+Math.round(n); }
+function fmtSize(b){ if(b>=1048576) return (b/1048576).toFixed(1)+' MB'; if(b>=1024) return Math.round(b/1024)+' KB'; return b+' B'; }
 function parseValue(v){
   if(!v) return 0;
   const s=String(v).replace(/,/g,'');
@@ -83,7 +84,7 @@ function buildFromSeed(){
   TEAM = {}; S.members.forEach(m => TEAM[m.id] = {name:m.name, role:m.role, color:m.color, email:m.email, appRole:m.app_role});
   OWNER = S.owner; DETAIL = S.detail;
   let n = 0;
-  PROJECTS = S.projects.map(p => ({ ...p, owner:S.owner[p.id], tasks: p.tasks.map(t => ({...t, id:'d'+(++n)})) }));
+  PROJECTS = S.projects.map(p => ({ ...p, owner:S.owner[p.id], _files:[], tasks: p.tasks.map(t => ({...t, id:'d'+(++n)})) }));
 }
 
 async function loadLive(){
@@ -98,10 +99,14 @@ async function loadLive(){
   const firstErr = [mem,prj,tsk,sub,com,att].find(r=>r.error);
   if(firstErr){ toast('Load error: '+firstErr.error.message, true); throw firstErr.error; }
   TEAM = {}; (mem.data||[]).forEach(m => TEAM[m.id] = {name:m.name, role:m.role, color:m.color, email:m.email, appRole:m.app_role});
-  const subBy={}, comBy={}, attBy={};
+  const subBy={}, comBy={}, attBy={}, pfBy={};
   (sub.data||[]).forEach(s => (subBy[s.task_id]=subBy[s.task_id]||[]).push({id:s.id, t:s.title, done:s.done}));
   (com.data||[]).forEach(c => (comBy[c.task_id]=comBy[c.task_id]||[]).push({id:c.id, a:c.author_id, w:fmtWhen(c.created_at), x:c.body}));
-  (att.data||[]).forEach(a => (attBy[a.task_id]=attBy[a.task_id]||[]).push({id:a.id, label:a.label, sub:a.sublabel, url:a.url}));
+  (att.data||[]).forEach(a => {
+    const item={id:a.id, label:a.label, sub:a.sublabel, url:a.url, path:a.path, by:a.uploaded_by};
+    if(a.task_id) (attBy[a.task_id]=attBy[a.task_id]||[]).push(item);
+    else if(a.project_id) (pfBy[a.project_id]=pfBy[a.project_id]||[]).push(item);
+  });
   const tBy={};
   (tsk.data||[]).forEach(t => (tBy[t.project_id]=tBy[t.project_id]||[]).push({
     id:t.id, t:t.title, a:t.assignee_id, due:t.due, pr:t.priority, s:t.status, blockedBy:t.blocked_by, blocks:t.blocks,
@@ -116,7 +121,7 @@ async function loadLive(){
   PROJECTS = (prj.data||[]).map(p => ({
     id:p.id, name:p.name, desc:p.description, segment:p.segment, motion:p.motion, solution:p.solution,
     pipeline:p.pipeline, value:p.value, audience:p.audience, launch:p.launch, status:p.status,
-    blocker:p.blocker, owner:p.owner_id, tasks:tBy[p.id]||[]
+    blocker:p.blocker, owner:p.owner_id, tasks:tBy[p.id]||[], _files:pfBy[p.id]||[]
   }));
 }
 
@@ -215,7 +220,7 @@ function renderProjectDetail(){
 
   document.getElementById('project-detail').innerHTML = `
     <div class="pd-head">
-      <div style="flex:1"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="pd-title">${esc(p.name)}</span><span class="pill ${st[0]}">${st[1]}</span>${isAdminMe()?`<button class="btn sm" onclick="openCampaignModal('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4z"/></svg>Edit</button>`:''}</div><div class="pd-desc">${esc(p.desc)}</div></div>
+      <div style="flex:1"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="pd-title">${esc(p.name)}</span><span class="pill ${st[0]}">${st[1]}</span>${isAdminMe()?`<button class="btn sm" onclick="openCampaignModal('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4z"/></svg>Edit</button>`:''}<button class="btn sm" onclick="exportCampaign('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export</button></div><div class="pd-desc">${esc(p.desc)}</div></div>
       <div class="pd-owner"><div class="lbl">Owner</div><span class="chip-person" style="font-size:13.5px">${av(owner)}${esc(teamName(owner))}</span></div>
     </div>
     <div class="metastrip">
@@ -225,6 +230,10 @@ function renderProjectDetail(){
       <div class="meta-item"><div class="ml">Launch</div><div class="mv">${esc(p.launch)||'—'}</div></div>
     </div>
     ${p.blocker?`<div class="pd-blocker"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span><b>Blocker:</b> ${esc(p.blocker)}</span></div>`:''}
+    <div class="tasks-head"><h3>Files</h3><span class="tg-count num">${(p._files||[]).length}</span><button class="btn sm" style="margin-left:auto" onclick="pickFile('${p.id}',null)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>Attach file</button></div>
+    <div style="margin-bottom:18px">
+      ${(p._files||[]).length ? p._files.map((l,fi)=>`<div class="att" style="cursor:pointer" onclick="openPFile('${p.id}',${fi})"><span class="ai"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span style="flex:1;min-width:0"><div class="al">${esc(l.label)}</div><div class="as">${esc(l.sub||'')}</div></span>${(isAdminMe()||l.by===ME)?`<button class="icon-btn" style="width:28px;height:28px" title="Remove" onclick="event.stopPropagation();delPFile('${p.id}',${fi})"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`:''}</div>`).join('') : '<div class="att-empty">No files yet — attach briefs, creative, or lists for this campaign.</div>'}
+    </div>
     <div class="tasks-head"><h3>Tasks</h3><span class="prog-inline"><div class="bar" style="width:120px"><span style="width:${pr.pct}%"></span></div><span class="num" style="font-size:12.5px;color:var(--ink-3)">${pr.done}/${pr.total} done</span></span><button class="btn primary sm" style="margin-left:auto" onclick="toggleAddTask()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add task</button></div>
     <div class="ttable">
       <div class="thead-row"><span></span><span>Task</span><span>Assignee</span><span class="col-due">Due</span><span class="col-prio">Priority</span><span>Status</span></div>
@@ -406,7 +415,8 @@ function renderDrawer(id,i){
       ${t._sub.map((s,si)=>`<div class="subrow ${s.done?'done':''}"><button class="check" style="${s.done?'background:var(--good);border-color:var(--good)':''}" onclick="toggleSub('${p.id}',${i},${si})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="opacity:${s.done?1:0}"><path d="M20 6L9 17l-5-5"/></svg></button><span class="sub-t">${esc(s.t)}</span></div>`).join('')}
       ${canEdit(t)?`<form class="subadd" onsubmit="addSub(event,'${p.id}',${i})"><input id="newsub" placeholder="Add a subtask…" /><button class="btn sm" type="submit">Add</button></form>`:''}
       <div class="d-sec">Attachments</div>
-      ${t._links.length? t._links.map(l=>`<a class="att" href="${esc(l.url)}" target="_blank" rel="noopener"><span class="ai"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span><div class="al">${esc(l.label)}</div><div class="as">${esc(l.sub)}</div></span></a>`).join('') : '<div class="att-empty">No files yet — link a SharePoint doc or asset for this task.</div>'}
+      ${t._links.length? t._links.map((l,ai)=>`<div class="att" style="cursor:pointer" onclick="openAtt('${p.id}',${i},${ai})"><span class="ai"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span style="flex:1;min-width:0"><div class="al">${esc(l.label)}</div><div class="as">${esc(l.sub||'')}</div></span>${(canEdit(t)||l.by===ME)?`<button class="icon-btn" style="width:28px;height:28px" title="Remove" onclick="event.stopPropagation();delAtt('${p.id}',${i},${ai})"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`:''}</div>`).join('') : '<div class="att-empty">No files yet.</div>'}
+      ${canEdit(t)?`<button class="btn sm" style="margin-top:8px" onclick="pickFile('${p.id}',{i:${i}})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>Attach file</button>`:''}
       <div class="d-sec">Activity</div>
       ${t._comments.map(c=>`<div class="activity">${av(c.a)}<div class="aline"><span class="an">${esc(teamName(c.a))}</span> ${esc(c.x)}<div class="aw">${esc(c.w)}</div></div></div>`).join('') || '<div class="att-empty">No activity yet.</div>'}
       <form class="commentbox" onsubmit="addComment(event,'${p.id}',${i})">${av(ME)}<textarea id="newcomment" placeholder="Write a comment…"></textarea><button class="btn primary sm" type="submit">Post</button></form>
@@ -427,6 +437,116 @@ async function addComment(e,id,i){
   if(LIVE){ const d=await pInsert('comments',{task_id:t.id,author_id:ME,body:v}); if(d) t._comments.push({id:d.id,a:d.author_id,w:fmtWhen(d.created_at),x:d.body}); }
   else t._comments.push({a:ME,w:'Just now',x:v});
   renderDrawer(id,i);
+}
+
+/* ===================================================================
+   Files — upload / open / delete (Supabase Storage bucket 'pmpm-files')
+   =================================================================== */
+function pickFile(projectId, taskRef){
+  const p=byId(projectId);
+  const t=taskRef?p.tasks[taskRef.i]:null;
+  if(t && !canEdit(t)){ denyEdit(); return; }
+  const inp=document.getElementById('file-input');
+  inp.onchange=()=>{ if(inp.files[0]) doUpload(projectId, taskRef, inp.files[0]); inp.value=''; };
+  inp.click();
+}
+async function doUpload(projectId, taskRef, file){
+  if(file.size > 25*1024*1024){ toast('Files up to 25 MB please', true); return; }
+  const p=byId(projectId), t=taskRef?p.tasks[taskRef.i]:null;
+  if(t) ensureDetail(p,t);
+  if(!LIVE){
+    const row={label:file.name, sub:fmtSize(file.size)+' · demo (not saved)', url:URL.createObjectURL(file), by:ME};
+    if(t){ t._links.push(row); renderDrawer(projectId,taskRef.i); } else { (p._files=p._files||[]).push(row); renderProjectDetail(); }
+    toast('Attached (demo — not saved)');
+    return;
+  }
+  toast('Uploading '+file.name+'…');
+  const safe=file.name.replace(/[^\w.\-]+/g,'_');
+  const path=`${projectId}/${crypto.randomUUID()}-${safe}`;
+  const {error}=await sb.storage.from('pmpm-files').upload(path, file);
+  if(error){ toast('Upload failed: '+error.message, true); return; }
+  const d=await pInsert('attachments',{ task_id:t?t.id:null, project_id:t?null:projectId,
+    label:file.name, sublabel:fmtSize(file.size)+' · '+teamName(ME), path, uploaded_by:ME });
+  if(!d){ await sb.storage.from('pmpm-files').remove([path]); return; }
+  const item={id:d.id, label:d.label, sub:d.sublabel, path:d.path, by:d.uploaded_by};
+  if(t){ t._links.push(item); renderDrawer(projectId,taskRef.i); } else { (p._files=p._files||[]).push(item); renderProjectDetail(); }
+  toast('File attached');
+}
+async function openStored(l){
+  if(l.url){ window.open(l.url,'_blank','noopener'); return; }
+  if(!l.path) return;
+  const {data,error}=await sb.storage.from('pmpm-files').createSignedUrl(l.path, 3600);
+  if(error){ toast('Could not open file: '+error.message, true); return; }
+  window.open(data.signedUrl,'_blank','noopener');
+}
+function openAtt(pid,i,ai){ openStored(byId(pid).tasks[i]._links[ai]); }
+function openPFile(pid,fi){ openStored(byId(pid)._files[fi]); }
+async function removeStored(l){
+  if(LIVE && l.id){
+    const {error}=await sb.from('attachments').delete().eq('id',l.id);
+    if(error){ toast('Remove failed: '+error.message, true); return false; }
+    if(l.path) await sb.storage.from('pmpm-files').remove([l.path]);
+  }
+  return true;
+}
+async function delAtt(pid,i,ai){
+  const t=byId(pid).tasks[i], l=t._links[ai];
+  if(!(canEdit(t)||l.by===ME)){ denyEdit(); return; }
+  if(!confirm(`Remove "${l.label}" from this task?`)) return;
+  if(await removeStored(l)){ t._links.splice(ai,1); renderDrawer(pid,i); toast('File removed'); }
+}
+async function delPFile(pid,fi){
+  const p=byId(pid), l=p._files[fi];
+  if(!(isAdminMe()||l.by===ME)){ toast('Only admins or the uploader can remove this file', true); return; }
+  if(!confirm(`Remove "${l.label}" from this campaign?`)) return;
+  if(await removeStored(l)){ p._files.splice(fi,1); renderProjectDetail(); toast('File removed'); }
+}
+
+/* ===================================================================
+   Excel export (SheetJS loaded on demand from CDN)
+   =================================================================== */
+let XLSXReady=null;
+function loadXLSX(){
+  return XLSXReady || (XLSXReady = new Promise((res,rej)=>{
+    if(window.XLSX) return res(window.XLSX);
+    const s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+    s.onload=()=>res(window.XLSX);
+    s.onerror=()=>{ XLSXReady=null; rej(new Error('could not load the Excel library')); };
+    document.head.appendChild(s);
+  }));
+}
+function buildCampaignWb(XLSX,p){
+  const pr=progress(p);
+  const wb=XLSX.utils.book_new();
+  const meta=[
+    ['Campaign', p.name], ['Description', p.desc||''], ['Owner', teamName(ownerOf(p))],
+    ['Status', STATUS_PILL[projStatus(p)][1]], ['Motion', p.motion||''], ['Segment', p.segment||''],
+    ['Solution', p.solution||''], ['Pipeline', p.pipeline||''], ['Audience', p.audience||''],
+    ['Est. value', p.value||''], ['Launch', p.launch||''], ['Blocker', p.blocker||''],
+    ['Progress', `${pr.done} of ${pr.total} tasks (${pr.pct}%)`], ['Exported', new Date().toLocaleString()]
+  ];
+  const ws1=XLSX.utils.aoa_to_sheet(meta);
+  ws1['!cols']=[{wch:14},{wch:80}];
+  XLSX.utils.book_append_sheet(wb, ws1, 'Campaign');
+  const rows=p.tasks.map(t=>{ ensureDetail(p,t); return {
+    'Task':t.t, 'Assignee':teamName(t.a), 'Due':t.due||'', 'Priority':(t.pr||'').toUpperCase(),
+    'Status':STATUS[t.s].label, 'Waiting on':blockedLabel(p,t)||'', 'Blocks':t.blocks||'',
+    'Subtasks':`${t._sub.filter(s=>s.done).length}/${t._sub.length}`, 'Description':t._desc||''
+  };});
+  const ws2=XLSX.utils.json_to_sheet(rows.length?rows:[{'Task':'(no tasks yet)'}]);
+  ws2['!cols']=[{wch:44},{wch:14},{wch:11},{wch:9},{wch:12},{wch:36},{wch:20},{wch:9},{wch:70}];
+  XLSX.utils.book_append_sheet(wb, ws2, 'Tasks');
+  return wb;
+}
+async function exportCampaign(id){
+  const p=byId(id); if(!p) return;
+  toast('Preparing Excel export…');
+  try{
+    const XLSX=await loadXLSX();
+    XLSX.writeFile(buildCampaignWb(XLSX,p), `PMPM - ${p.name.replace(/[\\/:*?"<>|]/g,'-')}.xlsx`);
+    toast('Excel downloaded');
+  }catch(e){ toast('Export failed: '+e.message, true); }
 }
 
 /* ===================================================================

@@ -79,7 +79,15 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   Base users edit only own tasks; UI gates via `isAdminMe()`/`canEdit(t)` but RLS is
   the real boundary. Client treats missing app_role as admin (pre-migration compat).
   Members with no email mapped can't edit anything in live mode — set emails in Team.
+- **Files + Excel export shipped (2026-07-31):** attachments now task-level
+  (task_id) OR campaign-level (project_id) with `path` (Storage) vs `url`
+  (external link) + `uploaded_by`; private bucket 'pmpm-files', open via
+  1-hour signed URL on click. Task attach = admin/assignee; campaign attach =
+  any signed-in user; delete = admin/uploader/task-editor
+  (db/upgrade-files.sql — note: storage.* SQL can fail with "must be owner"
+  on some projects → create bucket/policies via Dashboard → Storage instead).
+  Excel export (everyone): SheetJS lazy-loaded from jsdelivr in
+  `loadXLSX()`/`buildCampaignWb()` — Campaign meta sheet + Tasks sheet.
 - Nav stub remaining: Timeline ("soon").
-- Possible next (Tier 2/3): campaign templates, Supabase Storage file uploads,
-  password-reset UI, email digest (needs Edge Function), WordPress read-only
-  dashboard, Excel export, per-role permissions, Timeline/Gantt.
+- Possible next (Tier 2/3): campaign templates, password-reset UI, email digest
+  (needs Edge Function), WordPress read-only dashboard, Timeline/Gantt.

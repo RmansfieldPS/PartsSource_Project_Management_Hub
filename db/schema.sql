@@ -69,11 +69,14 @@ create table if not exists comments (
 );
 
 create table if not exists attachments (
-  id       uuid primary key default gen_random_uuid(),
-  task_id  uuid references tasks(id) on delete cascade,
-  label    text,
-  sublabel text,
-  url      text
+  id          uuid primary key default gen_random_uuid(),
+  task_id     uuid references tasks(id) on delete cascade,     -- set for task files
+  project_id  text references projects(id) on delete cascade,  -- set for campaign files
+  label       text,
+  sublabel    text,
+  url         text,   -- external link (e.g. SharePoint)
+  path        text,   -- storage path in the 'pmpm-files' bucket (uploads)
+  uploaded_by text references members(id)
 );
 
 create table if not exists notifications (

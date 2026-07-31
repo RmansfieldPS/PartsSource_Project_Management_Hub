@@ -42,6 +42,7 @@
         <button class="nav-item" data-view="roadblocks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Roadblocks <span class="count" id="c-rb">0</span></button>
         <button class="nav-item" data-view="calendar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Calendar</button>
         <button class="nav-item" data-view="team" id="nav-team" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>Team</button>
+        <button class="nav-item" data-view="templates" id="nav-tpl" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Templates</button>
         <div class="nav-label">Coming soon</div>
         <button class="nav-item disabled"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>Timeline <span class="soon">soon</span></button>
       </nav>
@@ -177,6 +178,15 @@
           <div class="page-sub" style="margin-top:12px" id="team-note"></div>
         </section>
 
+        <!-- TEMPLATES (admins only) -->
+        <section class="view" id="view-templates">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+            <span class="page-sub">Reusable campaign blueprints — tasks, role assignments, launch-relative due dates, and dependencies.</span>
+            <button class="btn primary sm" style="margin-left:auto" onclick="openTplEditor(null)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New template</button>
+          </div>
+          <div class="proj-grid" id="tpl-grid"></div>
+        </section>
+
         <!-- ROADBLOCKS -->
         <section class="view" id="view-roadblocks">
           <div class="banner crit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span id="rb-banner-text"></span></div>
@@ -191,6 +201,9 @@
   <div class="modal" id="campaign-modal" role="dialog" aria-modal="true">
     <div class="modal-head"><h3 id="cm-title">New campaign</h3><button class="icon-btn" onclick="closeModal()" title="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
     <form id="campaign-form" onsubmit="saveCampaign(event)">
+      <div class="mfield" id="cm-tpl-wrap"><label>Start from</label><select id="cm-template" onchange="applyTemplateChoice()"><option value="">Blank campaign</option></select></div>
+      <div class="mfield" id="cm-ldate-wrap" style="display:none"><label>Launch date (sets task due dates)</label><input id="cm-ldate" type="date" /></div>
+      <div class="mfield wide" id="cm-rolemap" style="display:none"></div>
       <div class="mfield wide"><label>Campaign name *</label><input id="cm-name" required placeholder="e.g. Q4 Depot Expansion" /></div>
       <div class="mfield wide"><label>Description</label><input id="cm-desc" placeholder="One-line summary of the play" /></div>
       <div class="mfield"><label>Owner</label><select id="cm-owner"></select></div>
@@ -204,6 +217,23 @@
       <div class="mfield wide"><label>Audience</label><input id="cm-audience" placeholder="Who this targets, and how many" /></div>
       <div class="mfield wide"><label>Blocker (leave empty if none)</label><input id="cm-blocker" placeholder="What's holding this campaign up" /></div>
       <div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Cancel</button><button type="submit" class="btn primary" id="cm-save">Create campaign</button></div>
+    </form>
+  </div>
+
+  <!-- Template editor modal (admins only) -->
+  <div class="modal" id="tpl-modal" role="dialog" aria-modal="true" style="width:760px">
+    <div class="modal-head"><h3 id="tpl-title">New template</h3><button class="icon-btn" onclick="closeModal()" title="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+    <form onsubmit="saveTpl(event)" style="display:grid;grid-template-columns:1fr 1fr;gap:12px 14px">
+      <div class="mfield"><label>Template name *</label><input id="tp-name" required placeholder="e.g. Email / Nurture Series" /></div>
+      <div class="mfield"><label>Default motion</label><select id="tp-motion"><option value="">— none —</option><option value="recruit">Recruit</option><option value="grow">Grow</option><option value="retain">Retain</option></select></div>
+      <div class="mfield wide"><label>Description</label><input id="tp-desc" placeholder="When to use this template" /></div>
+      <div class="mfield wide">
+        <label>Steps — offset is days relative to launch (−7 = a week before, 0 = launch day, blank = no due date)</label>
+        <div class="tstep thead"><span>Task</span><span>Role</span><span>Offset</span><span>Priority</span><span>Blocked by</span><span></span></div>
+        <div id="tp-steps"></div>
+        <button type="button" class="btn sm" style="margin-top:8px" onclick="addTplStep()">+ Add step</button>
+      </div>
+      <div class="modal-foot" style="grid-column:1 / -1"><button type="button" class="btn" onclick="closeModal()">Cancel</button><button type="submit" class="btn primary" id="tp-save">Save template</button></div>
     </form>
   </div>
 

@@ -94,6 +94,53 @@ window.PMPM_SEED = {
       {t:'IDG email series', a:'NB', due:'2026-05-12', pr:'med', s:'done'},
       {t:'Bi-weekly reporting to ELT', a:'MH', due:'2026-06-30', pr:'med', s:'done'} ]}
   ],
+  /* Campaign templates — steps use role slots (matched to members.role),
+     offsets in days relative to Launch (L), and dep = index of an earlier step. */
+  templates: [
+    { id:'tpl-email', name:'Email / Nurture Series',
+      description:'Standard multi-touch email campaign: strategy, audience, drafts, LP, QA, staged sends, reporting.',
+      defaults:{ motion:'recruit' },
+      steps:[
+        { t:'Strategy & messaging brief',                   role:'Campaign Manager',       off:-21, pr:'high' },
+        { t:'Pull audience list with Salesforce IDs',       role:'Campaign Manager',       off:-14, pr:'high' },
+        { t:'Draft email series copy',                      role:'Lifecycle Manager',      off:-10, pr:'high', sub:['Email 1 draft','Email 2 draft','Email 3 draft'] },
+        { t:'Build landing page',                           role:'Web Manager',            off:-7,  pr:'high', dep:2 },
+        { t:'Build emails in platform & QA',                role:'Lifecycle Manager',      off:-3,  pr:'high', dep:3, sub:['Load audience','QA links & UTMs','Schedule send'] },
+        { t:'Launch email 1',                               role:'Lifecycle Manager',      off:0,   pr:'high', dep:4 },
+        { t:'Mid-flight performance check',                 role:'Campaign Manager',       off:7,   pr:'med' },
+        { t:'Wrap report to ELT',                           role:'Director of Demand Gen', off:14,  pr:'med' } ]},
+    { id:'tpl-promo', name:'Promo Campaign',
+      description:'Limited-time offer play: codes, LP, email + popup, sales phase 2, lift analysis.',
+      defaults:{ motion:'recruit' },
+      steps:[
+        { t:'Define offer & set up discount codes',         role:'Campaign Manager',       off:-14, pr:'high' },
+        { t:'Build promo landing page',                     role:'Web Manager',            off:-7,  pr:'high', dep:0 },
+        { t:'Announcement email',                           role:'Lifecycle Manager',      off:0,   pr:'high', dep:1 },
+        { t:'Site popup live',                              role:'Web Manager',            off:7,   pr:'med',  dep:1 },
+        { t:'Sales/CSM phase-2 handoff',                    role:'Campaign Manager',       off:21,  pr:'med' },
+        { t:'Lift analysis & readout',                      role:'Campaign Manager',       off:30,  pr:'med' } ]},
+    { id:'tpl-abm', name:'ABM / High-Touch',
+      description:'Named-account campaign: target list, exec assets, video, outreach, ELT reporting.',
+      defaults:{ motion:'recruit' },
+      steps:[
+        { t:'Target account list from Sales/RevOps',        role:'Campaign Manager',       off:-21, pr:'high' },
+        { t:'Exec messaging & ROI assets',                  role:'Marketing Manager',      off:-10, pr:'high' },
+        { t:'Produce exec video invite',                    role:'Marketing Manager',      off:-7,  pr:'med' },
+        { t:'Build outreach sequence',                      role:'Lifecycle Manager',      off:-3,  pr:'high', dep:0 },
+        { t:'Launch outreach wave 1',                       role:'Lifecycle Manager',      off:0,   pr:'high', dep:3 },
+        { t:'Bi-weekly ELT reporting',                      role:'Director of Demand Gen', off:14,  pr:'med' } ]},
+    { id:'tpl-event', name:'Event / Webinar',
+      description:'Webinar or trade-show play: booking, promo, registration LP, day-of, follow-up, lead handoff.',
+      defaults:{ motion:'recruit' },
+      steps:[
+        { t:'Book event & confirm speakers',                role:'Director of Demand Gen', off:-30, pr:'high' },
+        { t:'Registration landing page',                    role:'Web Manager',            off:-21, pr:'high' },
+        { t:'Promo email series',                           role:'Lifecycle Manager',      off:-14, pr:'high', dep:1 },
+        { t:'Social posts',                                 role:'Marketing Manager',      off:-10, pr:'med',  dep:1 },
+        { t:'Day-of run of show',                           role:'Campaign Manager',       off:0,   pr:'high' },
+        { t:'Recording + follow-up email',                  role:'Lifecycle Manager',      off:2,   pr:'high', dep:4 },
+        { t:'Lead handoff to Sales/CSM',                    role:'Campaign Manager',       off:5,   pr:'high', dep:5 } ]}
+  ],
   detail: {
     'depot::Brown Briefcase email launch': {
       desc:'Final email in the Depot Grow sequence — the "Brown Briefcase" creative going to the 44 monthly-buyer segment at <$50 SpB. Feeds Phase 3 (Grow) reporting.',

@@ -25,6 +25,8 @@ let NOTIFS = [];      // in-app notifications (all members; filtered to ME on re
 let demoSeq = 0;
 let currentProject = null, currentTask = null, currentFilter = 'active', currentView = 'dashboard';
 let FILT = { board:{a:'',pr:''}, proj:{motion:'',owner:'',segment:''}, cal:{a:'',proj:''} };
+let TEMPLATES = [];   // campaign templates library
+let editingTpl = null;
 let calY = TODAY.getFullYear(), calM = TODAY.getMonth();
 
 /* ---------- Helpers ---------- */
@@ -85,6 +87,7 @@ function buildFromSeed(){
   OWNER = S.owner; DETAIL = S.detail;
   let n = 0;
   PROJECTS = S.projects.map(p => ({ ...p, owner:S.owner[p.id], _files:[], tasks: p.tasks.map(t => ({...t, id:'d'+(++n)})) }));
+  TEMPLATES = JSON.parse(JSON.stringify(S.templates||[])).map(t=>({...t, description:t.description||'', defaults:t.defaults||{}}));
 }
 
 async function loadLive(){
@@ -118,6 +121,11 @@ async function loadLive(){
     const nr = await sb.from('notifications').select('*').order('created_at',{ascending:false}).limit(100);
     NOTIFS = nr.error ? [] : (nr.data||[]).map(n=>({id:n.id, member_id:n.member_id, body:n.body, project_id:n.project_id, task_id:n.task_id, read:n.read, created_at:n.created_at}));
   } catch(_) { NOTIFS = []; }
+  // templates table may not exist until db/upgrade-templates.sql has run — tolerate that
+  try {
+    const tr = await sb.from('templates').select('*').order('created_at');
+    TEMPLATES = tr.error ? [] : (tr.data||[]).map(r=>({id:r.id, name:r.name, description:r.description||'', defaults:r.defaults||{}, steps:r.steps||[], by:r.created_by}));
+  } catch(_) { TEMPLATES = []; }
   PROJECTS = (prj.data||[]).map(p => ({
     id:p.id, name:p.name, desc:p.description, segment:p.segment, motion:p.motion, solution:p.solution,
     pipeline:p.pipeline, value:p.value, audience:p.audience, launch:p.launch, status:p.status,
@@ -220,7 +228,7 @@ function renderProjectDetail(){
 
   document.getElementById('project-detail').innerHTML = `
     <div class="pd-head">
-      <div style="flex:1"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="pd-title">${esc(p.name)}</span><span class="pill ${st[0]}">${st[1]}</span>${isAdminMe()?`<button class="btn sm" onclick="openCampaignModal('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4z"/></svg>Edit</button>`:''}<button class="btn sm" onclick="exportCampaign('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export</button></div><div class="pd-desc">${esc(p.desc)}</div></div>
+      <div style="flex:1"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="pd-title">${esc(p.name)}</span><span class="pill ${st[0]}">${st[1]}</span>${isAdminMe()?`<button class="btn sm" onclick="openCampaignModal('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4z"/></svg>Edit</button>`:''}<button class="btn sm" onclick="exportCampaign('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export</button>${isAdminMe()?`<button class="btn sm" onclick="saveAsTemplate('${p.id}')" title="Turn this campaign's task list into a reusable template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Save as template</button>`:''}</div><div class="pd-desc">${esc(p.desc)}</div></div>
       <div class="pd-owner"><div class="lbl">Owner</div><span class="chip-person" style="font-size:13.5px">${av(owner)}${esc(teamName(owner))}</span></div>
     </div>
     <div class="metastrip">
@@ -437,6 +445,163 @@ async function addComment(e,id,i){
   if(LIVE){ const d=await pInsert('comments',{task_id:t.id,author_id:ME,body:v}); if(d) t._comments.push({id:d.id,a:d.author_id,w:fmtWhen(d.created_at),x:d.body}); }
   else t._comments.push({a:ME,w:'Just now',x:v});
   renderDrawer(id,i);
+}
+
+/* ===================================================================
+   Campaign templates — instantiate / manage / save-as
+   =================================================================== */
+async function instantiateTemplate(tpl, projectId, ldateStr, roleMap){
+  const p=byId(projectId); if(!p) return;
+  const base = ldateStr ? new Date(ldateStr+'T00:00:00') : null;
+  const pad=n=>String(n).padStart(2,'0');
+  const dueFor = off => { if(off==null || off==='' || !base) return null; const d=new Date(base); d.setDate(d.getDate()+Number(off)); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; };
+  const created=[];
+  for(const [ix,st] of tpl.steps.entries()){
+    const a = roleMap[st.role] || roleDefault(st.role);
+    const due = dueFor(st.off);
+    const s = (st.dep!=null && st.dep!=='') ? 'blocked' : 'todo';
+    let task;
+    if(LIVE){
+      const d=await pInsert('tasks',{project_id:projectId, title:st.t, assignee_id:a, due, priority:st.pr||'med', status:s, position:ix});
+      if(!d) return;
+      task={id:d.id, t:st.t, a, due, pr:st.pr||'med', s, _sub:[], _comments:[], _links:[]};
+      if(st.sub && st.sub.length){
+        const {data}=await sb.from('subtasks').insert(st.sub.map((x,si)=>({task_id:d.id, title:x, done:false, position:si}))).select();
+        (data||[]).forEach(r=>task._sub.push({id:r.id, t:r.title, done:false}));
+      }
+    } else {
+      task={id:'d'+(++demoSeq)+'s'+ix, t:st.t, a, due, pr:st.pr||'med', s, _sub:(st.sub||[]).map(x=>({t:x,done:false})), _comments:[], _links:[]};
+    }
+    p.tasks.push(task); created.push(task);
+  }
+  for(const [ix,st] of tpl.steps.entries()){
+    if(st.dep!=null && st.dep!=='' && created[st.dep]){
+      created[ix].bt = created[st.dep].id;
+      if(LIVE) await pUpdate('tasks', created[ix].id, {blocked_by_task:created[st.dep].id});
+    }
+  }
+}
+
+function renderTemplates(){
+  document.getElementById('tpl-grid').innerHTML = TEMPLATES.length ? TEMPLATES.map(t=>{
+    const withDue=t.steps.filter(s=>s.off!=null&&s.off!=='').length, deps=t.steps.filter(s=>s.dep!=null&&s.dep!=='').length;
+    return `<div class="pcard" style="cursor:default">
+      <div class="ph"><div style="flex:1"><div class="pn">${esc(t.name)}</div><div class="pd">${esc(t.description||'')}</div></div>${(t.defaults&&t.defaults.motion)?`<span class="motion ${t.defaults.motion}">${esc(t.defaults.motion)}</span>`:''}</div>
+      <div class="tpl-steps-preview">${t.steps.slice(0,4).map((s,i)=>`${i+1}. ${esc(s.t)}`).join('<br>')}${t.steps.length>4?`<br>… +${t.steps.length-4} more`:''}</div>
+      <div class="prow"><span>${t.steps.length} steps · ${withDue} dated · ${deps} dependencies</span></div>
+      <div class="prow" style="gap:8px;justify-content:flex-end">
+        <button class="btn primary sm" onclick="useTemplate('${t.id}')">Use</button>
+        <button class="btn sm" onclick="openTplEditor('${t.id}')">Edit</button>
+        <button class="btn sm" onclick="deleteTemplate('${t.id}')">Delete</button>
+      </div>
+    </div>`;
+  }).join('') : `<div class="card" style="grid-column:1/-1;padding:22px;text-align:center">
+      <div style="font-weight:650;margin-bottom:6px">No templates yet</div>
+      <div class="page-sub" style="margin-bottom:14px">Load the four starter playbooks (Email Series, Promo, ABM, Event) or build one from scratch.</div>
+      <button class="btn primary sm" onclick="importStarters()">Import starter templates</button>
+    </div>`;
+}
+async function importStarters(){
+  if(!isAdminMe()){ toast('Admins only', true); return; }
+  const S=window.PMPM_SEED;
+  for(const t of (S.templates||[])){
+    if(TEMPLATES.some(x=>x.name===t.name)) continue;
+    if(LIVE){ const d=await pInsert('templates',{name:t.name, description:t.description, defaults:t.defaults||{}, steps:t.steps, created_by:ME}); if(d) TEMPLATES.push({id:d.id, name:d.name, description:d.description, defaults:d.defaults, steps:d.steps, by:ME}); }
+    else TEMPLATES.push(JSON.parse(JSON.stringify(t)));
+  }
+  renderTemplates(); toast('Starter templates imported');
+}
+function useTemplate(id){ openCampaignModal(null); document.getElementById('cm-template').value=String(id); applyTemplateChoice(); }
+
+/* ---------- Template editor ---------- */
+function roleSlots(){ return [...new Set(Object.values(TEAM).map(m=>m.role).filter(Boolean))]; }
+function openTplEditor(id){
+  if(!isAdminMe()){ toast('Admins only', true); return; }
+  const src = id ? tplById(id) : null;
+  editingTpl = src ? JSON.parse(JSON.stringify(src)) : {name:'', description:'', defaults:{}, steps:[{t:'',role:roleSlots()[0],off:null,pr:'med',sub:[],dep:null}]};
+  document.getElementById('tpl-title').textContent = src ? 'Edit template' : 'New template';
+  document.getElementById('tp-name').value = editingTpl.name;
+  document.getElementById('tp-desc').value = editingTpl.description||'';
+  document.getElementById('tp-motion').value = (editingTpl.defaults&&editingTpl.defaults.motion)||'';
+  renderTplSteps();
+  document.getElementById('tpl-modal').classList.add('open');
+  document.getElementById('modal-ov').classList.add('open');
+}
+function renderTplSteps(){
+  const slots=roleSlots();
+  document.getElementById('tp-steps').innerHTML = editingTpl.steps.map((s,i)=>`
+    <div class="tstep">
+      <input value="${esc(s.t)}" placeholder="Task name" onchange="tplStepSet(${i},'t',this.value)" />
+      <select onchange="tplStepSet(${i},'role',this.value)">${slots.map(r=>`<option ${s.role===r?'selected':''}>${esc(r)}</option>`).join('')}</select>
+      <input type="number" value="${s.off==null?'':s.off}" placeholder="—" onchange="tplStepSet(${i},'off',this.value)" />
+      <select onchange="tplStepSet(${i},'pr',this.value)"><option value="high" ${s.pr==='high'?'selected':''}>High</option><option value="med" ${s.pr==='med'||!s.pr?'selected':''}>Med</option><option value="low" ${s.pr==='low'?'selected':''}>Low</option></select>
+      <select onchange="tplStepSet(${i},'dep',this.value)"><option value="">— none —</option>${editingTpl.steps.map((x,xi)=>xi===i?'':`<option value="${xi}" ${s.dep===xi?'selected':''}>Step ${xi+1}</option>`).join('')}</select>
+      <button type="button" class="del" title="Remove step" onclick="delTplStep(${i})">✕</button>
+    </div>`).join('');
+}
+function tplStepSet(i,f,v){
+  if(f==='off') editingTpl.steps[i].off = v===''?null:parseInt(v,10);
+  else if(f==='dep') editingTpl.steps[i].dep = v===''?null:parseInt(v,10);
+  else editingTpl.steps[i][f]=v;
+}
+function addTplStep(){ editingTpl.steps.push({t:'',role:roleSlots()[0],off:null,pr:'med',sub:[],dep:null}); renderTplSteps(); }
+function delTplStep(i){
+  editingTpl.steps.splice(i,1);
+  editingTpl.steps.forEach(s=>{ if(s.dep===i) s.dep=null; else if(s.dep>i) s.dep--; });
+  renderTplSteps();
+}
+async function saveTpl(e){
+  e.preventDefault();
+  if(!isAdminMe()){ toast('Admins only', true); return; }
+  editingTpl.name = document.getElementById('tp-name').value.trim();
+  editingTpl.description = document.getElementById('tp-desc').value.trim();
+  editingTpl.defaults = {...(editingTpl.defaults||{}), motion: document.getElementById('tp-motion').value||undefined};
+  editingTpl.steps = editingTpl.steps.filter(s=>s.t && s.t.trim());
+  if(!editingTpl.name || !editingTpl.steps.length){ toast('A template needs a name and at least one step', true); return; }
+  const body={name:editingTpl.name, description:editingTpl.description, defaults:editingTpl.defaults, steps:editingTpl.steps};
+  if(editingTpl.id && tplById(editingTpl.id)){
+    if(LIVE) await pUpdate('templates', editingTpl.id, body);
+    Object.assign(tplById(editingTpl.id), body);
+  } else {
+    if(LIVE){ const d=await pInsert('templates',{...body, created_by:ME}); if(!d) return; editingTpl.id=d.id; }
+    else editingTpl.id='d'+(++demoSeq);
+    TEMPLATES.push({...body, id:editingTpl.id, by:ME});
+  }
+  closeModal(); renderTemplates(); toast('Template saved');
+}
+async function deleteTemplate(id){
+  if(!isAdminMe()){ toast('Admins only', true); return; }
+  const t=tplById(id); if(!t) return;
+  if(!confirm(`Delete the "${t.name}" template? Campaigns already created from it are not affected.`)) return;
+  if(LIVE){ const {error}=await sb.from('templates').delete().eq('id',id); if(error){ toast('Delete failed: '+error.message,true); return; } }
+  TEMPLATES.splice(TEMPLATES.indexOf(t),1);
+  renderTemplates(); toast('Template deleted');
+}
+
+/* ---------- Save an existing campaign as a template ---------- */
+async function saveAsTemplate(pid){
+  if(!isAdminMe()){ toast('Admins only', true); return; }
+  const p=byId(pid);
+  const name=(prompt('Template name:', p.name.replace(/[—–-].*$/,'').trim()+' playbook')||'').trim();
+  if(!name) return;
+  // anchor "launch day": a task that looks like a launch, else the latest due date
+  const dated=p.tasks.filter(t=>t.due);
+  const launchTask=dated.find(t=>/launch|go.?live|send/i.test(t.t));
+  const anchor=launchTask?launchTask.due:(dated.length?dated.map(t=>t.due).sort()[dated.length-1]:null);
+  const aDate=anchor?new Date(anchor+'T00:00:00'):null;
+  const steps=p.tasks.map(t=>{ ensureDetail(p,t); return {
+    t:t.t,
+    role:(TEAM[t.a]&&TEAM[t.a].role)||'Campaign Manager',
+    off:(t.due&&aDate)?Math.round((new Date(t.due+'T00:00:00')-aDate)/86400000):null,
+    pr:t.pr||'med',
+    sub:(t._sub||[]).map(s=>s.t),
+    dep:t.bt?(p.tasks.findIndex(x=>x.id===t.bt)>-1?p.tasks.findIndex(x=>x.id===t.bt):null):null
+  };});
+  const body={name, description:'Saved from '+p.name, defaults:{motion:p.motion, segment:p.segment, solution:p.solution, pipeline:p.pipeline}, steps};
+  let tid='d'+(++demoSeq);
+  if(LIVE){ const d=await pInsert('templates',{...body, created_by:ME}); if(!d) return; tid=d.id; }
+  TEMPLATES.push({...body, id:tid, by:ME});
+  toast(`Template "${name}" saved — find it under Templates`);
 }
 
 /* ===================================================================
@@ -716,9 +881,9 @@ document.addEventListener('click',e=>{ if(!e.target.closest('.search')) document
 /* ===================================================================
    Navigation
    =================================================================== */
-const titles = { dashboard:['Dashboard','Demand Gen campaign portfolio'], mytasks:['My Tasks',"Everything assigned to you, grouped by when it's due"], board:['Board','Kanban view · drag tasks across stages'], projects:['Campaigns','All Demand Gen campaigns and their progress'], project:['Campaign','Tasks, owner & assignments'], calendar:['Calendar','Every task on its due date'], team:['Team','People, sign-ins & permissions'], roadblocks:['Roadblocks','Tasks blocked by upstream work or inputs'] };
+const titles = { dashboard:['Dashboard','Demand Gen campaign portfolio'], mytasks:['My Tasks',"Everything assigned to you, grouped by when it's due"], board:['Board','Kanban view · drag tasks across stages'], projects:['Campaigns','All Demand Gen campaigns and their progress'], project:['Campaign','Tasks, owner & assignments'], calendar:['Calendar','Every task on its due date'], team:['Team','People, sign-ins & permissions'], templates:['Templates','Reusable campaign playbooks'], roadblocks:['Roadblocks','Tasks blocked by upstream work or inputs'] };
 function show(view){
-  if(view==='team' && !isAdminMe()) view='dashboard';
+  if((view==='team'||view==='templates') && !isAdminMe()) view='dashboard';
   currentView=view;
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.getElementById('view-'+view).classList.add('active');
@@ -732,6 +897,7 @@ function show(view){
   if(view==='projects') renderProjects(currentFilter);
   if(view==='calendar') renderCalendar();
   if(view==='team') renderTeam();
+  if(view==='templates') renderTemplates();
   if(view==='roadblocks') renderRoadblocks();
   window.scrollTo(0,0);
 }
@@ -767,14 +933,41 @@ function openCampaignModal(id){
   document.getElementById('cm-launch').value   = p ? (p.launch||'') : '';
   document.getElementById('cm-audience').value = p ? (p.audience||'') : '';
   document.getElementById('cm-blocker').value  = p ? (p.blocker||'') : '';
+  // template picker: creation only
+  document.getElementById('cm-tpl-wrap').style.display = p ? 'none' : '';
+  document.getElementById('cm-template').innerHTML = `<option value="">Blank campaign</option>`+TEMPLATES.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('');
+  document.getElementById('cm-template').value = '';
+  document.getElementById('cm-ldate').value = '';
+  applyTemplateChoice();
   document.getElementById('campaign-modal').classList.add('open');
   document.getElementById('modal-ov').classList.add('open');
   document.getElementById('cm-name').focus();
 }
+function tplById(id){ return TEMPLATES.find(t=>String(t.id)===String(id)); }
+function roleDefault(role){
+  const byRole=Object.keys(TEAM).find(k=>TEAM[k].role===role);
+  return byRole || ME;
+}
+function applyTemplateChoice(){
+  const tpl = tplById(document.getElementById('cm-template').value);
+  document.getElementById('cm-ldate-wrap').style.display = tpl ? '' : 'none';
+  const rm=document.getElementById('cm-rolemap');
+  rm.style.display = tpl ? '' : 'none';
+  if(!tpl){ rm.innerHTML=''; return; }
+  const d=tpl.defaults||{};
+  if(d.motion) document.getElementById('cm-motion').value=d.motion;
+  if(d.segment) document.getElementById('cm-segment').value=d.segment;
+  if(d.solution) document.getElementById('cm-solution').value=d.solution;
+  if(d.pipeline) document.getElementById('cm-pipeline').value=d.pipeline;
+  const roles=[...new Set(tpl.steps.map(s=>s.role).filter(Boolean))];
+  rm.innerHTML = `<label>Who fills each role for this campaign</label>`+roles.map(r=>
+    `<div class="rolemap-row"><span class="rl">${esc(r)}</span><select data-role="${esc(r)}">${Object.keys(TEAM).map(k=>`<option value="${k}" ${k===roleDefault(r)?'selected':''}>${esc(teamName(k))}</option>`).join('')}</select></div>`).join('');
+}
 function closeModal(){
-  editingProject = null;
+  editingProject = null; editingTpl = null;
   document.getElementById('campaign-modal').classList.remove('open');
   document.getElementById('user-modal').classList.remove('open');
+  document.getElementById('tpl-modal').classList.remove('open');
   document.getElementById('modal-ov').classList.remove('open');
 }
 
@@ -857,14 +1050,21 @@ async function saveCampaign(e){
     if(isView('project') && currentProject===p.id) renderProjectDetail(); else show(currentView);
     toast('Campaign updated');
   } else {
+    const tpl = tplById(document.getElementById('cm-template').value);
+    const ldate = document.getElementById('cm-ldate').value || null;
+    const roleMap = {};
+    document.querySelectorAll('#cm-rolemap select[data-role]').forEach(s=>roleMap[s.dataset.role]=s.value);
+    if(tpl && ldate && !fields.launch) fields.launch = 'Launches '+fmtDue(ldate);
     let id;
     if(LIVE){ const d=await pInsert('projects', {...fields, sort:PROJECTS.length}); if(!d) return; id=d.id; }
     else id='d'+(++demoSeq)+Date.now();
     PROJECTS.push({ id, name:fields.name, desc:fields.description, owner:fields.owner_id, status:fields.status,
       motion:fields.motion, segment:fields.segment, solution:fields.solution, pipeline:fields.pipeline,
-      value:fields.value, launch:fields.launch, audience:fields.audience, blocker:fields.blocker, tasks:[] });
-    closeModal(); renderBoardPicker(); refreshCounts(); openProject(id);
-    toast('Campaign created');
+      value:fields.value, launch:fields.launch, audience:fields.audience, blocker:fields.blocker, tasks:[], _files:[] });
+    closeModal();
+    if(tpl){ toast('Building campaign from template…'); await instantiateTemplate(tpl, id, ldate, roleMap); }
+    renderBoardPicker(); refreshCounts(); openProject(id);
+    toast(tpl ? `Campaign created from "${tpl.name}" — ${byId(id).tasks.length} tasks added` : 'Campaign created');
   }
 }
 
@@ -878,6 +1078,7 @@ function renderMe(){
     ${LIVE?`<button class="icon-btn" title="Sign out" onclick="signOut()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>`:''}</div>
     ${!LIVE?`<button class="whoami" onclick="identify()">Viewing as ${esc(m.name)} · switch</button>`:''}`;
   document.getElementById('nav-team').style.display = isAdminMe() ? '' : 'none';
+  document.getElementById('nav-tpl').style.display  = isAdminMe() ? '' : 'none';
   document.getElementById('btn-new').style.display  = isAdminMe() ? '' : 'none';
 }
 function identify(){

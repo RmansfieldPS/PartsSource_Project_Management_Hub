@@ -89,6 +89,16 @@ create table if not exists notifications (
   created_at timestamptz default now()
 );
 
+create table if not exists templates (
+  id          uuid primary key default gen_random_uuid(),
+  name        text not null,
+  description text,
+  defaults    jsonb default '{}'::jsonb,   -- {motion, segment, solution, pipeline}
+  steps       jsonb default '[]'::jsonb,   -- [{t, role, off, pr, sub:[], dep}]
+  created_by  text references members(id),
+  created_at  timestamptz default now()
+);
+
 -- ---------- Row Level Security ----------
 -- Roles: 'admin' edits everything and manages users; 'user' edits only
 -- tasks assigned to them. Identity = sign-in email matched to members.email.
@@ -101,7 +111,9 @@ alter table subtasks      enable row level security;
 alter table comments      enable row level security;
 alter table attachments   enable row level security;
 alter table notifications enable row level security;
--- (upgrade-roles.sql creates the helper functions and per-table policies.)
+alter table templates     enable row level security;
+-- (upgrade-roles.sql / upgrade-files.sql / upgrade-templates.sql create the
+--  helper functions and per-table policies.)
 
 -- ---------- Realtime ----------
 -- Push live changes to every connected client.

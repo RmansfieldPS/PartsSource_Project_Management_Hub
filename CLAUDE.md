@@ -88,6 +88,16 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   on some projects → create bucket/policies via Dashboard → Storage instead).
   Excel export (everyone): SheetJS lazy-loaded from jsdelivr in
   `loadXLSX()`/`buildCampaignWb()` — Campaign meta sheet + Tasks sheet.
+- **Campaign templates shipped (2026-07-31):** `templates` table (jsonb `steps`:
+  [{t, role, off, pr, sub[], dep}]) — role = member job title (role slot, resolved
+  via `roleDefault()`), off = days relative to launch (dues computed at creation),
+  dep = index of earlier step (instantiated as real blocked_by_task + 'blocked'
+  status, so auto-unblock works). Flows: template picker in New Campaign modal
+  (launch date + role→person remap), "Save as template" on campaign detail
+  (generalizes assignees→roles, dues→offsets anchored on launch-ish task else
+  latest due), Templates manager view (admin nav) with step editor + starter
+  import. 4 starters in seed-data.js (Email Series, Promo, ABM, Event).
+  Templates are admin-managed, viewable by all. Migration: db/upgrade-templates.sql.
 - Nav stub remaining: Timeline ("soon").
-- Possible next (Tier 2/3): campaign templates, password-reset UI, email digest
-  (needs Edge Function), WordPress read-only dashboard, Timeline/Gantt.
+- Possible next (Tier 2/3): password-reset UI, email digest (needs Edge Function),
+  WordPress read-only dashboard, Timeline/Gantt.

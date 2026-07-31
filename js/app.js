@@ -21,6 +21,8 @@ let PROJECTS = [];    // model (see loadLive / buildFromSeed)
 let DETAIL = {};      // demo-only rich task detail
 let OWNER = {};       // demo-only owner map
 let ME = null;        // current member code
+let NOTIFS = [];      // in-app notifications (all members; filtered to ME on render)
+let demoSeq = 0;
 let currentProject = null, currentTask = null, currentFilter = 'active', currentView = 'dashboard';
 
 /* ---------- Helpers ---------- */
@@ -33,6 +35,16 @@ function av(code,cls){ const m=TEAM[code]; if(!m) return `<span class="av-sm ${c
 function progress(p){ const total=p.tasks.length, done=p.tasks.filter(t=>t.s==='done').length; return {done,total,pct: total?Math.round(done/total*100):0}; }
 function projStatus(p){ if(p.status==='complete')return 'complete'; if(p.status==='planning')return 'planning'; if(p.status==='review')return 'review'; return p.tasks.some(t=>t.s==='blocked')?'atrisk':'active'; }
 function ownerOf(p){ return p.owner || (p.tasks[0] && p.tasks[0].a); }
+function upstreamOf(p,t){ return t.bt ? p.tasks.find(x=>x.id===t.bt) : null; }
+function blockedLabel(p,t){ const u=upstreamOf(p,t); return u ? u.t : (t.blockedBy||''); }
+function fmtMoney(n){ if(n>=1e6) return '$'+(n/1e6).toFixed(n>=1e7?0:1)+'M'; if(n>=1e3) return '$'+Math.round(n/1e3)+'K'; return '$'+Math.round(n); }
+function parseValue(v){
+  if(!v) return 0;
+  const s=String(v).replace(/,/g,'');
+  const m=s.match(/(\d+(?:\.\d+)?)(?:\s*[–\-]\s*\d+(?:\.\d+)?)?\s*([MK])/i);
+  if(!m) return 0;
+  return parseFloat(m[1]) * (m[2].toUpperCase()==='M' ? 1e6 : 1e3);
+}
 function isView(v){ return document.getElementById('view-'+v).classList.contains('active'); }
 function toast(msg,bad){ const el=document.getElementById('toast'); el.textContent=msg; el.className='toast show'+(bad?' bad':''); setTimeout(()=>el.className='toast',3200); }
 
@@ -86,8 +98,14 @@ async function loadLive(){
   const tBy={};
   (tsk.data||[]).forEach(t => (tBy[t.project_id]=tBy[t.project_id]||[]).push({
     id:t.id, t:t.title, a:t.assignee_id, due:t.due, pr:t.priority, s:t.status, blockedBy:t.blocked_by, blocks:t.blocks,
+    bt:t.blocked_by_task||null, completedAt:t.completed_at||null,
     _desc:t.description||null, _sub:subBy[t.id]||[], _comments:comBy[t.id]||[], _links:attBy[t.id]||[]
   }));
+  // notifications table may not exist until db/upgrade-tier1.sql has run — tolerate that
+  try {
+    const nr = await sb.from('notifications').select('*').order('created_at',{ascending:false}).limit(100);
+    NOTIFS = nr.error ? [] : (nr.data||[]).map(n=>({id:n.id, member_id:n.member_id, body:n.body, project_id:n.project_id, task_id:n.task_id, read:n.read, created_at:n.created_at}));
+  } catch(_) { NOTIFS = []; }
   PROJECTS = (prj.data||[]).map(p => ({
     id:p.id, name:p.name, desc:p.description, segment:p.segment, motion:p.motion, solution:p.solution,
     pipeline:p.pipeline, value:p.value, audience:p.audience, launch:p.launch, status:p.status,
@@ -105,9 +123,22 @@ async function pInsert(table,row){ const {data,error}=await sb.from(table).inser
    RENDER — Dashboard
    =================================================================== */
 function renderDashboard(){
-  document.getElementById('kpi-active').textContent = PROJECTS.filter(p=>p.status==='active').length;
+  const active = PROJECTS.filter(p=>p.status==='active');
+  document.getElementById('kpi-active').textContent = active.length;
+  document.getElementById('kpi-active-foot').textContent = `of ${PROJECTS.length} total campaigns`;
   document.getElementById('kpi-rb').textContent = PROJECTS.flatMap(p=>p.tasks).filter(t=>t.s==='blocked').length;
   document.getElementById('kpi-done').textContent = PROJECTS.filter(p=>p.status==='complete').length;
+  document.getElementById('kpi-pipeline').textContent = fmtMoney(active.reduce((s,p)=>s+parseValue(p.value),0));
+
+  // open work by status (non-complete campaigns)
+  const openTasks = PROJECTS.filter(p=>p.status!=='complete').flatMap(p=>p.tasks);
+  const sbCounts = {}; ORDER.forEach(s=>sbCounts[s]=0);
+  openTasks.forEach(t=>{ if(sbCounts[t.s]!=null) sbCounts[t.s]++; });
+  const sbMax = Math.max(...Object.values(sbCounts),1);
+  document.getElementById('sb-total').textContent = `${openTasks.length} tasks`;
+  document.getElementById('status-breakdown').innerHTML = ORDER.map(s=>
+    `<div class="sb-row"><span class="sb-name"><span class="dot" style="background:${STATUS[s].dot}"></span>${STATUS[s].label}</span><div class="sb-track"><span style="width:${Math.round(sbCounts[s]/sbMax*100)}%;background:${STATUS[s].dot}"></span></div><span class="num" style="width:24px;text-align:right;font-weight:700;font-size:12.5px">${sbCounts[s]}</span></div>`
+  ).join('');
 
   document.getElementById('dash-active').innerHTML = PROJECTS.filter(p=>p.status==='active').map(p=>{
     const pr=progress(p), st=STATUS_PILL[projStatus(p)];
@@ -157,7 +188,7 @@ function renderProjectDetail(){
   const rows = p.tasks.map((t,i)=>`
     <div class="trow ${t.s==='done'?'done':''}">
       <button class="check" style="${t.s==='done'?'background:var(--good);border-color:var(--good)':''}" onclick="cycleDone('${p.id}',${i})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="opacity:${t.s==='done'?1:0}"><path d="M20 6L9 17l-5-5"/></svg></button>
-      <div><div class="trow-title" style="cursor:pointer" onclick="openTask('${p.id}',${i})">${esc(t.t)}</div>${t.blockedBy?`<div class="trow-sub">⛔ Waiting on: ${esc(t.blockedBy)}</div>`:t.blocks?`<div class="trow-sub" style="color:var(--warn)">↗ Blocks ${esc(t.blocks)}</div>`:''}</div>
+      <div><div class="trow-title" style="cursor:pointer" onclick="openTask('${p.id}',${i})">${esc(t.t)}</div>${(t.bt||t.blockedBy)?`<div class="trow-sub">⛔ Waiting on: ${esc(blockedLabel(p,t))}</div>`:t.blocks?`<div class="trow-sub" style="color:var(--warn)">↗ Blocks ${esc(t.blocks)}</div>`:''}</div>
       <div><button class="assignee" onclick="openAssign(event,'${p.id}',${i})">${av(t.a)}${esc(teamName(t.a))}<span class="car">▾</span></button></div>
       <div class="col-due num t-due ${t.due&&new Date(t.due+'T00:00:00')<TODAY&&t.s!=='done'?'over':''}" style="font-size:12.5px;color:var(--ink-2)">${fmtDue(t.due)}</div>
       <div class="col-prio"><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></div>
@@ -166,7 +197,7 @@ function renderProjectDetail(){
 
   document.getElementById('project-detail').innerHTML = `
     <div class="pd-head">
-      <div style="flex:1"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="pd-title">${esc(p.name)}</span><span class="pill ${st[0]}">${st[1]}</span></div><div class="pd-desc">${esc(p.desc)}</div></div>
+      <div style="flex:1"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="pd-title">${esc(p.name)}</span><span class="pill ${st[0]}">${st[1]}</span><button class="btn sm" onclick="openCampaignModal('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4z"/></svg>Edit</button></div><div class="pd-desc">${esc(p.desc)}</div></div>
       <div class="pd-owner"><div class="lbl">Owner</div><span class="chip-person" style="font-size:13.5px">${av(owner)}${esc(teamName(owner))}</span></div>
     </div>
     <div class="metastrip">
@@ -203,12 +234,49 @@ async function addTask(e){
     if(!d) return;
     p.tasks.push({id:d.id,t:d.title,a:d.assignee_id,due:d.due,pr:d.priority,s:d.status,_sub:[],_comments:[],_links:[]});
   } else {
-    p.tasks.push({id:'d'+Date.now(),t:title,a,due,pr,s:'todo'});
+    p.tasks.push({id:'d'+(++demoSeq)+Date.now(),t:title,a,due,pr,s:'todo'});
+  }
+  if(a!==ME) notify(a, `${teamName(ME)} assigned you "${title}" in ${p.name}.`, p.id, p.tasks[p.tasks.length-1].id);
+  rerender();
+}
+function setStatus(id,i,v){
+  const p=byId(id), t=p.tasks[i], was=t.s;
+  if(was===v) return;
+  t.s=v;
+  const fields={status:v};
+  if(v==='done' && was!=='done'){ t.completedAt=new Date().toISOString(); fields.completed_at=t.completedAt; }
+  if(was==='done' && v!=='done'){ t.completedAt=null; fields.completed_at=null; }
+  if(LIVE) pUpdate('tasks',t.id,fields);
+  if(v==='done') autoUnblock(p,t);
+  rerender();
+}
+function cycleDone(id,i){ const t=byId(id).tasks[i]; setStatus(id,i, t.s==='done'?'todo':'done'); }
+function autoUnblock(p,doneTask){
+  p.tasks.forEach(x=>{
+    if(x.bt===doneTask.id && x.s==='blocked'){
+      x.s='todo'; x.bt=null; x.blockedBy=null;
+      if(LIVE) pUpdate('tasks',x.id,{status:'todo',blocked_by_task:null,blocked_by:null});
+      const msg=`Unblocked — "${doneTask.t}" was completed.`;
+      if(x._comments) x._comments.push({a:ME,w:'Just now',x:msg});
+      if(LIVE && x.id) pInsert('comments',{task_id:x.id,author_id:ME,body:msg});
+      notify(x.a, `"${x.t}" is unblocked — ${doneTask.t} was completed.`, p.id, x.id);
+      toast(`Unblocked: ${x.t}`);
+    }
+  });
+}
+function setBlockedBy(id,i,val){
+  const p=byId(id), t=p.tasks[i];
+  if(val){
+    t.bt=val; t.blockedBy=null;
+    if(t.s!=='blocked' && t.s!=='done') t.s='blocked';
+    if(LIVE) pUpdate('tasks',t.id,{blocked_by_task:val,blocked_by:null,status:t.s});
+  } else {
+    t.bt=null; t.blockedBy=null;
+    if(t.s==='blocked') t.s='todo';
+    if(LIVE) pUpdate('tasks',t.id,{blocked_by_task:null,blocked_by:null,status:t.s});
   }
   rerender();
 }
-function setStatus(id,i,v){ const t=byId(id).tasks[i]; t.s=v; rerender(); if(LIVE) pUpdate('tasks',t.id,{status:v}); }
-function cycleDone(id,i){ const t=byId(id).tasks[i]; t.s=(t.s==='done'?'todo':'done'); rerender(); if(LIVE) pUpdate('tasks',t.id,{status:t.s}); }
 function rerender(){ if(currentProject && isView('project')) renderProjectDetail(); if(currentTask) renderDrawer(currentTask.pid,currentTask.i); refreshCounts(); }
 
 /* ---------- Assignee popover ---------- */
@@ -221,7 +289,62 @@ function openAssign(e,id,i){
   amenu.style.top=(r.bottom+6)+'px';
   amenu.classList.add('open');
 }
-function assign(id,i,who){ const t=byId(id).tasks[i]; t.a=who; amenu.classList.remove('open'); rerender(); if(LIVE) pUpdate('tasks',t.id,{assignee_id:who}); }
+function assign(id,i,who){
+  const t=byId(id).tasks[i], was=t.a;
+  t.a=who; amenu.classList.remove('open'); rerender();
+  if(LIVE) pUpdate('tasks',t.id,{assignee_id:who});
+  if(who!==was && who!==ME) notify(who, `${teamName(ME)} assigned you "${t.t}".`, id, t.id);
+}
+
+/* ---------- Notifications ---------- */
+async function notify(member, body, projectId, taskId){
+  if(!member || member===ME) return; // don't notify yourself about your own action
+  const n={member_id:member, body, project_id:projectId||null, task_id:taskId||null, read:false, created_at:new Date().toISOString()};
+  if(LIVE){
+    try{ const {data}=await sb.from('notifications').insert(n).select().single(); NOTIFS.unshift(data||n); }
+    catch(_){ NOTIFS.unshift(n); }
+  } else NOTIFS.unshift({...n, id:'n'+(++demoSeq)});
+  renderBell();
+}
+function myNotifs(){ return NOTIFS.filter(n=>n.member_id===ME); }
+function renderBell(){
+  const unread=myNotifs().filter(n=>!n.read).length;
+  const b=document.getElementById('bell-badge');
+  b.style.display = unread ? '' : 'none';
+  b.textContent = unread;
+}
+function toggleBell(e){
+  e.stopPropagation();
+  const panel=document.getElementById('bell-panel');
+  if(panel.classList.contains('open')){ panel.classList.remove('open'); return; }
+  const mine=myNotifs();
+  // computed due-today/overdue for ME
+  const dueSoon = PROJECTS.flatMap(p=>p.tasks.map((t,i)=>({t,p,i})))
+    .filter(x=>x.t.a===ME && x.t.s!=='done' && x.t.due && new Date(x.t.due+'T00:00:00')<=TODAY);
+  panel.innerHTML =
+    (dueSoon.length?`<div class="bp-head">Needs attention today</div>`+dueSoon.map(({t,p,i})=>{
+      const over=new Date(t.due+'T00:00:00')<TODAY;
+      return `<div class="notif-row" onclick="closeBell();openTask('${p.id}',${i})">${av(t.a)}<div><div>${over?'<b style="color:var(--crit)">Overdue:</b> ':'<b>Due today:</b> '}${esc(t.t)}</div><div class="nw">${esc(p.name)}</div></div></div>`;
+    }).join(''):'') +
+    `<div class="bp-head">Notifications</div>` +
+    (mine.length ? mine.slice(0,30).map(n=>{
+      const p=n.project_id?byId(n.project_id):null;
+      const idx=p&&n.task_id ? p.tasks.findIndex(t=>t.id===n.task_id) : -1;
+      const click = (p&&idx>=0) ? `closeBell();openTask('${p.id}',${idx})` : (p?`closeBell();openProject('${p.id}')`:`closeBell()`);
+      return `<div class="notif-row ${n.read?'':'unread'}" onclick="${click}"><div><div>${esc(n.body)}</div><div class="nw">${fmtWhen(n.created_at)||'Just now'}</div></div></div>`;
+    }).join('') : `<div class="notif-empty">Nothing yet. You'll see assignments and unblocked tasks here.</div>`);
+  panel.classList.add('open');
+  markNotifsRead();
+}
+function closeBell(){ document.getElementById('bell-panel').classList.remove('open'); }
+async function markNotifsRead(){
+  const unread=myNotifs().filter(n=>!n.read);
+  if(!unread.length){ renderBell(); return; }
+  unread.forEach(n=>n.read=true);
+  renderBell();
+  if(LIVE){ try{ await sb.from('notifications').update({read:true}).eq('member_id',ME).eq('read',false); }catch(_){} }
+}
+document.addEventListener('click',e=>{ if(!e.target.closest('.bell-wrap')) closeBell(); });
 document.addEventListener('click',e=>{ if(!amenu.contains(e.target)&&!e.target.closest('.assignee')) amenu.classList.remove('open'); });
 
 /* ===================================================================
@@ -229,7 +352,7 @@ document.addEventListener('click',e=>{ if(!amenu.contains(e.target)&&!e.target.c
    =================================================================== */
 function openTask(id,i){ const p=byId(id),t=p.tasks[i]; ensureDetail(p,t); currentTask={pid:id,i,taskId:t.id}; renderDrawer(id,i); document.getElementById('drawer').classList.add('open'); document.getElementById('drawer-ov').classList.add('open'); }
 function closeDrawer(){ currentTask=null; document.getElementById('drawer').classList.remove('open'); document.getElementById('drawer-ov').classList.remove('open'); }
-document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeDrawer(); });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ closeDrawer(); closeModal(); closeBell(); document.getElementById('search-results').classList.remove('open'); } });
 function renderDrawer(id,i){
   const p=byId(id); if(!p) return closeDrawer();
   const t=p.tasks[i]; if(!t) return closeDrawer();
@@ -247,8 +370,12 @@ function renderDrawer(id,i){
         <span class="fl">Status</span><span><select class="status-sel" onchange="setStatus('${p.id}',${i},this.value)">${ORDER.map(s=>`<option value="${s}" ${t.s===s?'selected':''}>${STATUS[s].label}</option>`).join('')}</select></span>
         <span class="fl">Due date</span><span class="num t-due ${over?'over':''}" style="font-weight:600">${over?'Overdue · ':''}${fmtDue(t.due)}</span>
         <span class="fl">Priority</span><span><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></span>
+        <span class="fl">Blocked by</span><span><select class="status-sel" style="max-width:100%" onchange="setBlockedBy('${p.id}',${i},this.value)">
+          <option value="">— nothing —</option>
+          ${p.tasks.filter(x=>x.id!==t.id && x.s!=='done').map(x=>`<option value="${x.id}" ${t.bt===x.id?'selected':''}>${esc(x.t)}</option>`).join('')}
+        </select></span>
       </div>
-      ${t.blockedBy?`<div class="d-blocker2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/></svg><span>Waiting on: ${esc(t.blockedBy)}</span></div>`:''}
+      ${t.bt?(function(){ const u=upstreamOf(p,t); return u?`<div class="d-blocker2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/></svg><span>Waiting on: <b>${esc(u.t)}</b> (${STATUS[u.s].label}, ${esc(teamName(u.a))}). Unblocks automatically when it's completed.</span></div>`:''; })():t.blockedBy?`<div class="d-blocker2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/></svg><span>Waiting on: ${esc(t.blockedBy)} (external input)</span></div>`:''}
       ${t.blocks?`<div class="d-blocker2" style="background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 30%,transparent);color:var(--warn)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg><span>This task blocks ${esc(t.blocks)}.</span></div>`:''}
       <div class="d-sec">Description</div>
       <div class="d-desc">${esc(t._desc)}</div>
@@ -292,7 +419,7 @@ function renderMyTasks(){
     const crit=name==='Overdue';
     return `<div class="task-group"><div class="tg-head"><h3 style="${crit?'color:var(--crit)':''}">${name}</h3><span class="tg-count num">${arr.length}</span></div>${arr.map(({t,p,i})=>{
       const over=t.due&&new Date(t.due+'T00:00:00')<TODAY;
-      return `<div class="task"><button class="check" onclick="cycleDone('${p.id}',${i})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></button><div class="t-body"><div class="t-title" style="cursor:pointer" onclick="openTask('${p.id}',${i})">${esc(t.t)}</div><div class="t-meta"><span class="tag" style="cursor:pointer" onclick="openProject('${p.id}')">${esc(p.name)}</span><span class="t-due ${over?'over':''}">${over?'Overdue · ':'Due '}${fmtDue(t.due)}</span>${t.blockedBy?`<span class="pill crit" style="font-size:11px">Blocked</span>`:''}${t.blocks?`<span class="pill crit plain" style="font-size:11px">Blocks work</span>`:''}</div></div><div class="t-right"><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></div></div>`;
+      return `<div class="task"><button class="check" onclick="cycleDone('${p.id}',${i})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></button><div class="t-body"><div class="t-title" style="cursor:pointer" onclick="openTask('${p.id}',${i})">${esc(t.t)}</div><div class="t-meta"><span class="tag" style="cursor:pointer" onclick="openProject('${p.id}')">${esc(p.name)}</span><span class="t-due ${over?'over':''}">${over?'Overdue · ':'Due '}${fmtDue(t.due)}</span>${(t.bt||t.blockedBy)?`<span class="pill crit" style="font-size:11px">Blocked</span>`:''}${t.blocks?`<span class="pill crit plain" style="font-size:11px">Blocks work</span>`:''}</div></div><div class="t-right"><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></div></div>`;
     }).join('')}</div>`;
   }).join('');
 }
@@ -308,15 +435,35 @@ function renderBoard(id){
   picker.value=id;
   document.getElementById('board').innerHTML = ORDER.map(s=>{
     const items=p.tasks.map((t,idx)=>({t,idx})).filter(o=>o.t.s===s);
-    return `<div class="col"><div class="col-h"><span class="dot" style="background:${STATUS[s].dot}"></span><span class="name">${STATUS[s].label}</span><span class="n num">${items.length}</span></div>${items.map(({t,idx})=>`
-      <div class="kanban" onclick="openTask('${p.id}',${idx})" ${s==='blocked'?'style="border-color:color-mix(in srgb, var(--crit) 40%, var(--line))"':''}>
+    return `<div class="col" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropCard(event,'${p.id}','${s}')"><div class="col-h"><span class="dot" style="background:${STATUS[s].dot}"></span><span class="name">${STATUS[s].label}</span><span class="n num">${items.length}</span></div>${items.map(({t,idx})=>`
+      <div class="kanban" draggable="true" ondragstart="dragStart(event,'${p.id}',${idx})" ondragend="dragEnd(event)" onclick="cardClick('${p.id}',${idx})" ${s==='blocked'?'style="border-color:color-mix(in srgb, var(--crit) 40%, var(--line))"':''}>
         <div class="kt">${esc(t.t)}</div>
         <div class="kmeta"><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></div>
-        ${t.blockedBy?`<div class="blocked-note"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>${esc(t.blockedBy)}</div>`:''}
+        ${(t.bt||t.blockedBy)?`<div class="blocked-note"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>${esc(blockedLabel(p,t))}</div>`:''}
         <div class="kfoot">${av(t.a)}<span class="t-due num" style="font-size:11px;${t.due&&new Date(t.due+'T00:00:00')<TODAY&&s!=='done'?'color:var(--crit)':'color:var(--ink-3)'}">${s==='done'?'Done':fmtDue(t.due)}</span></div>
       </div>`).join('')||'<div style="padding:10px 6px;color:var(--ink-3);font-size:12px">—</div>'}</div>`;
   }).join('');
 }
+
+/* ---------- Board drag & drop ---------- */
+let dragInfo=null, suppressClick=false;
+function dragStart(e,pid,idx){
+  dragInfo={pid,idx}; suppressClick=true;
+  e.dataTransfer.effectAllowed='move';
+  e.dataTransfer.setData('text/plain','');
+  e.currentTarget.classList.add('dragging');
+}
+function dragEnd(e){ e.currentTarget.classList.remove('dragging'); document.querySelectorAll('.col.dragover').forEach(c=>c.classList.remove('dragover')); setTimeout(()=>suppressClick=false,80); }
+function dragOver(e){ e.preventDefault(); e.dataTransfer.dropEffect='move'; e.currentTarget.classList.add('dragover'); }
+function dragLeave(e){ if(!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.classList.remove('dragover'); }
+function dropCard(e,pid,status){
+  e.preventDefault();
+  e.currentTarget.classList.remove('dragover');
+  if(!dragInfo || dragInfo.pid!==pid) return;
+  setStatus(pid,dragInfo.idx,status);
+  dragInfo=null;
+}
+function cardClick(pid,idx){ if(suppressClick) return; openTask(pid,idx); }
 
 /* ===================================================================
    RENDER — Roadblocks
@@ -324,13 +471,44 @@ function renderBoard(id){
 function renderRoadblocks(){
   const blocked = PROJECTS.flatMap(p=>p.tasks.map((t,i)=>({t,p,i})).filter(x=>x.t.s==='blocked'));
   document.getElementById('rb-banner-text').innerHTML = blocked.length ? `<b>${blocked.length} task${blocked.length>1?'s are':' is'} blocked.</b> Each is waiting on an upstream task or input before work can continue.` : `No roadblocks right now — nothing is blocked.`;
-  document.getElementById('roadblocks-body').innerHTML = blocked.map(({t,p,i})=>`
+  document.getElementById('roadblocks-body').innerHTML = blocked.map(({t,p,i})=>{
+    const u=upstreamOf(p,t);
+    const uIdx = u ? p.tasks.indexOf(u) : -1;
+    const right = u
+      ? `<div class="tt" style="cursor:pointer" onclick="openTask('${p.id}',${uIdx})">${esc(u.t)}</div><div class="mt"><span class="pill ${u.s==='progress'?'info':'warn'}" style="font-size:11px">${STATUS[u.s].label}</span>${av(u.a)}<span class="page-sub">auto-unblocks when done</span></div>`
+      : `<div class="tt">${esc(t.blockedBy||'Unspecified blocker')}</div><div class="mt"><span class="pill warn" style="font-size:11px">External input needed</span></div>`;
+    return `
     <div class="rb crit">
       <div class="rb-side"><div class="lbl">Blocked task</div><div class="tt" style="cursor:pointer" onclick="openTask('${p.id}',${i})">${esc(t.t)}</div><div class="mt"><span class="tag" style="cursor:pointer" onclick="openProject('${p.id}')">${esc(p.name)}</span>${av(t.a)}</div></div>
       <div class="rb-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg><div class="cap">waiting on</div></div>
-      <div class="rb-side"><div class="lbl">Roadblock</div><div class="tt">${esc(t.blockedBy)}</div><div class="mt"><span class="pill warn" style="font-size:11px">Needs action</span></div></div>
-    </div>`).join('');
+      <div class="rb-side"><div class="lbl">Roadblock</div>${right}</div>
+    </div>`;
+  }).join('');
 }
+
+/* ===================================================================
+   Search
+   =================================================================== */
+function runSearch(q){
+  const box=document.getElementById('search-results');
+  q=(q||'').trim().toLowerCase();
+  if(q.length<2){ box.classList.remove('open'); return; }
+  const hits=[];
+  PROJECTS.forEach(p=>{
+    if([p.name,p.desc,p.segment,p.solution].some(f=>f&&f.toLowerCase().includes(q)))
+      hits.push({kind:'camp', label:p.name, sub:`${p.segment||''} · ${STATUS_PILL[projStatus(p)][1]}`, click:`openProject('${p.id}')`});
+  });
+  PROJECTS.forEach(p=>p.tasks.forEach((t,i)=>{
+    if(t.t.toLowerCase().includes(q))
+      hits.push({kind:'task', label:t.t, sub:`${p.name} · ${teamName(t.a)}`, click:`openTask('${p.id}',${i})`});
+  }));
+  box.innerHTML = hits.length
+    ? hits.slice(0,9).map(h=>`<div class="sr-row" onmousedown="closeSearch();${h.click}"><span class="sr-kind ${h.kind}">${h.kind==='camp'?'Campaign':'Task'}</span><div style="min-width:0"><div style="font-weight:620;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(h.label)}</div><div class="sr-sub">${esc(h.sub)}</div></div></div>`).join('')
+    : `<div class="sr-none">No matches for "${esc(q)}"</div>`;
+  box.classList.add('open');
+}
+function closeSearch(){ document.getElementById('search-results').classList.remove('open'); document.getElementById('global-search').value=''; }
+document.addEventListener('click',e=>{ if(!e.target.closest('.search')) document.getElementById('search-results').classList.remove('open'); });
 
 /* ===================================================================
    Navigation
@@ -357,20 +535,68 @@ function refreshCounts(){
   document.getElementById('c-rb').textContent = PROJECTS.flatMap(p=>p.tasks).filter(t=>t.s==='blocked').length;
 }
 function rerenderCurrent(){
-  renderBoardPicker(); refreshCounts();
+  renderBoardPicker(); refreshCounts(); renderBell();
   show(currentView);
   if(currentTask){ const p=byId(currentTask.pid); if(p){ const idx=p.tasks.findIndex(t=>t.id===currentTask.taskId); if(idx>=0){ currentTask.i=idx; renderDrawer(currentTask.pid,idx); } else closeDrawer(); } else closeDrawer(); }
 }
 
-/* ---------- New campaign ---------- */
-async function createProjectFlow(){
-  const name=(prompt('New campaign name:')||'').trim(); if(!name) return;
-  const base={name,description:'',segment:'',motion:'recruit',solution:'',pipeline:'',value:'',audience:'',launch:'TBD',status:'active',owner_id:ME,blocker:null,sort:PROJECTS.length};
-  let id;
-  if(LIVE){ const d=await pInsert('projects',base); if(!d) return; id=d.id; }
-  else id='d'+Date.now();
-  PROJECTS.push({id,name,desc:'',segment:'',motion:'recruit',solution:'',pipeline:'',value:'',audience:'',launch:'TBD',status:'active',blocker:null,owner:ME,tasks:[]});
-  renderBoardPicker(); refreshCounts(); openProject(id);
+/* ---------- Campaign create / edit modal ---------- */
+let editingProject = null; // null = creating new
+function openCampaignModal(id){
+  editingProject = id;
+  const p = id ? byId(id) : null;
+  document.getElementById('cm-title').textContent = p ? 'Edit campaign' : 'New campaign';
+  document.getElementById('cm-save').textContent = p ? 'Save changes' : 'Create campaign';
+  document.getElementById('cm-owner').innerHTML = Object.keys(TEAM).map(k=>`<option value="${k}">${esc(TEAM[k].name)}</option>`).join('');
+  document.getElementById('cm-name').value     = p ? p.name : '';
+  document.getElementById('cm-desc').value     = p ? (p.desc||'') : '';
+  document.getElementById('cm-owner').value    = p ? (ownerOf(p)||ME) : ME;
+  document.getElementById('cm-status').value   = p ? p.status : 'active';
+  document.getElementById('cm-motion').value   = p ? (p.motion||'recruit') : 'recruit';
+  document.getElementById('cm-segment').value  = p ? (p.segment||'') : '';
+  document.getElementById('cm-solution').value = p ? (p.solution||'') : '';
+  document.getElementById('cm-pipeline').value = p ? (p.pipeline||'') : '';
+  document.getElementById('cm-value').value    = p ? (p.value||'') : '';
+  document.getElementById('cm-launch').value   = p ? (p.launch||'') : '';
+  document.getElementById('cm-audience').value = p ? (p.audience||'') : '';
+  document.getElementById('cm-blocker').value  = p ? (p.blocker||'') : '';
+  document.getElementById('campaign-modal').classList.add('open');
+  document.getElementById('modal-ov').classList.add('open');
+  document.getElementById('cm-name').focus();
+}
+function closeModal(){
+  editingProject = null;
+  document.getElementById('campaign-modal').classList.remove('open');
+  document.getElementById('modal-ov').classList.remove('open');
+}
+async function saveCampaign(e){
+  e.preventDefault();
+  const v = id => document.getElementById(id).value.trim();
+  const fields = {
+    name: v('cm-name'), description: v('cm-desc'), owner_id: v('cm-owner'), status: v('cm-status'),
+    motion: v('cm-motion'), segment: v('cm-segment'), solution: v('cm-solution'), pipeline: v('cm-pipeline'),
+    value: v('cm-value'), launch: v('cm-launch'), audience: v('cm-audience'), blocker: v('cm-blocker') || null
+  };
+  if(!fields.name) return;
+  if(editingProject){
+    const p = byId(editingProject);
+    if(LIVE) await pUpdate('projects', p.id, fields);
+    Object.assign(p, { name:fields.name, desc:fields.description, owner:fields.owner_id, status:fields.status,
+      motion:fields.motion, segment:fields.segment, solution:fields.solution, pipeline:fields.pipeline,
+      value:fields.value, launch:fields.launch, audience:fields.audience, blocker:fields.blocker });
+    closeModal(); renderBoardPicker(); refreshCounts();
+    if(isView('project') && currentProject===p.id) renderProjectDetail(); else show(currentView);
+    toast('Campaign updated');
+  } else {
+    let id;
+    if(LIVE){ const d=await pInsert('projects', {...fields, sort:PROJECTS.length}); if(!d) return; id=d.id; }
+    else id='d'+(++demoSeq)+Date.now();
+    PROJECTS.push({ id, name:fields.name, desc:fields.description, owner:fields.owner_id, status:fields.status,
+      motion:fields.motion, segment:fields.segment, solution:fields.solution, pipeline:fields.pipeline,
+      value:fields.value, launch:fields.launch, audience:fields.audience, blocker:fields.blocker, tasks:[] });
+    closeModal(); renderBoardPicker(); refreshCounts(); openProject(id);
+    toast('Campaign created');
+  }
 }
 
 /* ===================================================================
@@ -472,7 +698,7 @@ async function afterLogin(){
   hideAuth();
   try { await loadLive(); } catch(_){ return; }
   await resolveMe();
-  renderMe(); renderBoardPicker(); refreshCounts(); show('dashboard');
+  renderMe(); renderBoardPicker(); refreshCounts(); renderBell(); show('dashboard');
   subscribeRealtime();
   if(!PROJECTS.length) document.getElementById('seed-banner').style.display='flex';
 }
@@ -492,7 +718,7 @@ async function boot(){
   } else {
     buildFromSeed();
     await resolveMe();
-    renderMe(); renderBoardPicker(); refreshCounts(); show('dashboard');
+    renderMe(); renderBoardPicker(); refreshCounts(); renderBell(); show('dashboard');
   }
 }
 document.addEventListener('DOMContentLoaded', boot);

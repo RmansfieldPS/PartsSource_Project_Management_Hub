@@ -56,8 +56,16 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   trusted team). Revisit before wider rollout.
 
 ## Status / next steps
-- Demo mode verified working. Live path (auth, persistence, realtime, first-run seed)
-  written but validate against a real Supabase project.
+- **In production:** https://ps-project-management.netlify.app/ (Netlify auto-deploys
+  from GitHub `RmansfieldPS/PartsSource_Project_Management_Hub`, branch `main`).
+  GitHub Pages is blocked by the corporate firewall — do not move hosting back.
+- Live Supabase project is connected and seeded; demo + live paths both verified.
+- **Tier 1 shipped (2026-07-31):** campaign create/edit modal; real task dependencies
+  (`blocked_by_task` → auto-unblock + comment + notification when upstream completes;
+  `blocked_by` text = external blocker); drag-and-drop board; in-app notifications
+  (bell, `notifications` table); computed pipeline KPI (`parseValue`) + open-work
+  breakdown; working global search. Requires `db/upgrade-tier1.sql` on existing DBs.
 - Nav stubs: Calendar and Timeline ("soon").
-- Possible next: in-app edit of campaign fields; per-role permissions; WordPress
-  read-only dashboard embed.
+- Possible next (Tier 2/3): calendar view, campaign templates, Supabase Storage file
+  uploads, filters, password-reset UI, email digest (needs Edge Function), WordPress
+  read-only dashboard, Excel export, per-role permissions.

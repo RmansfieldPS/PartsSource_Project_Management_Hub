@@ -35,18 +35,20 @@ create table if not exists projects (
 );
 
 create table if not exists tasks (
-  id          uuid primary key default gen_random_uuid(),
-  project_id  text references projects(id) on delete cascade,
-  title       text not null,
-  assignee_id text references members(id),
-  due         date,
-  priority    text default 'med' check (priority in ('high','med','low')),
-  status      text default 'todo' check (status in ('todo','progress','blocked','review','done')),
-  blocked_by  text,
-  blocks      text,
-  description text,
-  position    int default 0,
-  created_at  timestamptz default now()
+  id              uuid primary key default gen_random_uuid(),
+  project_id      text references projects(id) on delete cascade,
+  title           text not null,
+  assignee_id     text references members(id),
+  due             date,
+  priority        text default 'med' check (priority in ('high','med','low')),
+  status          text default 'todo' check (status in ('todo','progress','blocked','review','done')),
+  blocked_by      text,                                          -- external blocker (free text)
+  blocked_by_task uuid references tasks(id) on delete set null,  -- real dependency (auto-unblock)
+  blocks          text,
+  description     text,
+  completed_at    timestamptz,
+  position        int default 0,
+  created_at      timestamptz default now()
 );
 
 create table if not exists subtasks (
@@ -73,20 +75,31 @@ create table if not exists attachments (
   url      text
 );
 
+create table if not exists notifications (
+  id         uuid primary key default gen_random_uuid(),
+  member_id  text references members(id),
+  body       text not null,
+  project_id text,
+  task_id    uuid,
+  read       boolean default false,
+  created_at timestamptz default now()
+);
+
 -- ---------- Row Level Security ----------
 -- Internal, trusted team: any signed-in user can read & write.
 -- Anonymous (not signed in) users get nothing.
-alter table members     enable row level security;
-alter table projects    enable row level security;
-alter table tasks       enable row level security;
-alter table subtasks    enable row level security;
-alter table comments    enable row level security;
-alter table attachments enable row level security;
+alter table members       enable row level security;
+alter table projects      enable row level security;
+alter table tasks         enable row level security;
+alter table subtasks      enable row level security;
+alter table comments      enable row level security;
+alter table attachments   enable row level security;
+alter table notifications enable row level security;
 
 do $$
 declare t text;
 begin
-  foreach t in array array['members','projects','tasks','subtasks','comments','attachments'] loop
+  foreach t in array array['members','projects','tasks','subtasks','comments','attachments','notifications'] loop
     execute format('drop policy if exists "auth_all" on %I', t);
     execute format('create policy "auth_all" on %I for all to authenticated using (true) with check (true)', t);
   end loop;
@@ -97,7 +110,7 @@ end $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['projects','tasks','subtasks','comments'] loop
+  foreach t in array array['projects','tasks','subtasks','comments','notifications'] loop
     begin
       execute format('alter publication supabase_realtime add table %I', t);
     exception when duplicate_object then null;

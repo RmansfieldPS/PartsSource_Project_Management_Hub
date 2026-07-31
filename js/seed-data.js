@@ -3,12 +3,12 @@
    Source: "UPDATED Demand Gen Campaign Priorities May 2026.xlsx". */
 window.PMPM_SEED = {
   members: [
-    { id: 'CG', name: 'Cole G.',     role: 'Campaign Manager',      color: '#0A6CBF', email: null },
-    { id: 'BO', name: 'Baxter O.',   role: 'Web Manager',           color: '#0E9AA6', email: null },
-    { id: 'RM', name: 'Ryan M.',     role: 'Lifecycle Manager',     color: '#8A4FC2', email: 'ryan.mansfield@partssource.com' },
-    { id: 'MD', name: 'Meredith D.', role: 'Marketing Manager',     color: '#C77A0A', email: null },
-    { id: 'NB', name: 'Nora B.',     role: 'Marketing Manager',     color: '#1E9E62', email: null },
-    { id: 'MH', name: 'Mari H.',     role: 'Director of Demand Gen', color: '#D64545', email: null }
+    { id: 'CG', name: 'Cole G.',     role: 'Campaign Manager',      color: '#0A6CBF', email: null, app_role: 'user' },
+    { id: 'BO', name: 'Baxter O.',   role: 'Web Manager',           color: '#0E9AA6', email: null, app_role: 'user' },
+    { id: 'RM', name: 'Ryan M.',     role: 'Lifecycle Manager',     color: '#8A4FC2', email: 'ryan.mansfield@partssource.com', app_role: 'admin' },
+    { id: 'MD', name: 'Meredith D.', role: 'Marketing Manager',     color: '#C77A0A', email: null, app_role: 'user' },
+    { id: 'NB', name: 'Nora B.',     role: 'Marketing Manager',     color: '#1E9E62', email: null, app_role: 'user' },
+    { id: 'MH', name: 'Mari H.',     role: 'Director of Demand Gen', color: '#D64545', email: null, app_role: 'user' }
   ],
   owner: { depot:'CG', welcome:'RM', crosssell:'MD', proparts:'NB', bedscables:'CG', renewal:'RM', mktplace:'MD', ambulatory:'NB', proservice:'MH', top5:'MD', winback:'NB', rhtp:'MH', 'tn-webinar':'MD', 'blitz-ka':'MH', 'blitz-pro':'CG' },
   projects: [

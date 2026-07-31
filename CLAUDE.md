@@ -70,6 +70,15 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   overdue red, click opens drawer) and filters (`FILT` state: board by
   assignee/priority, campaigns by motion/owner/segment, calendar by
   assignee/campaign). Pure front-end, no schema change.
+- **Roles shipped (2026-07-31):** `members.app_role` ('admin'|'user'). Enforcement is
+  in RLS (db/upgrade-roles.sql): identity = sign-in email ↔ members.email via
+  security-definer helpers (`current_member_id`, `is_admin`, `can_edit_task`,
+  `is_upstream_mine` — the last one lets a base user's task completion auto-unblock
+  others' tasks). Admins edit everything + Team screen (edit emails/roles, Add User
+  = throwaway supabase client signUp + members insert; admin session untouched).
+  Base users edit only own tasks; UI gates via `isAdminMe()`/`canEdit(t)` but RLS is
+  the real boundary. Client treats missing app_role as admin (pre-migration compat).
+  Members with no email mapped can't edit anything in live mode — set emails in Team.
 - Nav stub remaining: Timeline ("soon").
 - Possible next (Tier 2/3): campaign templates, Supabase Storage file uploads,
   password-reset UI, email digest (needs Edge Function), WordPress read-only

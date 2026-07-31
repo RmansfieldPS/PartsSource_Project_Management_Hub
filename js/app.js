@@ -37,6 +37,11 @@ function av(code,cls){ const m=TEAM[code]; if(!m) return `<span class="av-sm ${c
 function progress(p){ const total=p.tasks.length, done=p.tasks.filter(t=>t.s==='done').length; return {done,total,pct: total?Math.round(done/total*100):0}; }
 function projStatus(p){ if(p.status==='complete')return 'complete'; if(p.status==='planning')return 'planning'; if(p.status==='review')return 'review'; return p.tasks.some(t=>t.s==='blocked')?'atrisk':'active'; }
 function ownerOf(p){ return p.owner || (p.tasks[0] && p.tasks[0].a); }
+/* Roles: 'admin' | 'user'. Missing role (pre-migration DB) = admin, so nothing
+   breaks before db/upgrade-roles.sql has been run. */
+function isAdminMe(){ const r = TEAM[ME] && TEAM[ME].appRole; return r === 'admin' || r == null; }
+function canEdit(t){ return isAdminMe() || t.a === ME; }
+function denyEdit(){ toast("Only the assignee or an admin can change this task", true); }
 function upstreamOf(p,t){ return t.bt ? p.tasks.find(x=>x.id===t.bt) : null; }
 function blockedLabel(p,t){ const u=upstreamOf(p,t); return u ? u.t : (t.blockedBy||''); }
 function fmtMoney(n){ if(n>=1e6) return '$'+(n/1e6).toFixed(n>=1e7?0:1)+'M'; if(n>=1e3) return '$'+Math.round(n/1e3)+'K'; return '$'+Math.round(n); }
@@ -75,7 +80,7 @@ function ensureDetail(p,t){
    =================================================================== */
 function buildFromSeed(){
   const S = window.PMPM_SEED;
-  TEAM = {}; S.members.forEach(m => TEAM[m.id] = {name:m.name, role:m.role, color:m.color, email:m.email});
+  TEAM = {}; S.members.forEach(m => TEAM[m.id] = {name:m.name, role:m.role, color:m.color, email:m.email, appRole:m.app_role});
   OWNER = S.owner; DETAIL = S.detail;
   let n = 0;
   PROJECTS = S.projects.map(p => ({ ...p, owner:S.owner[p.id], tasks: p.tasks.map(t => ({...t, id:'d'+(++n)})) }));
@@ -92,7 +97,7 @@ async function loadLive(){
   ]);
   const firstErr = [mem,prj,tsk,sub,com,att].find(r=>r.error);
   if(firstErr){ toast('Load error: '+firstErr.error.message, true); throw firstErr.error; }
-  TEAM = {}; (mem.data||[]).forEach(m => TEAM[m.id] = {name:m.name, role:m.role, color:m.color, email:m.email});
+  TEAM = {}; (mem.data||[]).forEach(m => TEAM[m.id] = {name:m.name, role:m.role, color:m.color, email:m.email, appRole:m.app_role});
   const subBy={}, comBy={}, attBy={};
   (sub.data||[]).forEach(s => (subBy[s.task_id]=subBy[s.task_id]||[]).push({id:s.id, t:s.title, done:s.done}));
   (com.data||[]).forEach(c => (comBy[c.task_id]=comBy[c.task_id]||[]).push({id:c.id, a:c.author_id, w:fmtWhen(c.created_at), x:c.body}));
@@ -196,19 +201,21 @@ function openProject(id){ currentProject=id; renderProjectDetail(); show('projec
 function renderProjectDetail(){
   const p=byId(currentProject); if(!p) return;
   const pr=progress(p), stKey=projStatus(p), st=STATUS_PILL[stKey], owner=ownerOf(p);
-  const rows = p.tasks.map((t,i)=>`
+  const rows = p.tasks.map((t,i)=>{
+    const editable=canEdit(t);
+    return `
     <div class="trow ${t.s==='done'?'done':''}">
-      <button class="check" style="${t.s==='done'?'background:var(--good);border-color:var(--good)':''}" onclick="cycleDone('${p.id}',${i})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="opacity:${t.s==='done'?1:0}"><path d="M20 6L9 17l-5-5"/></svg></button>
+      <button class="check" style="${t.s==='done'?'background:var(--good);border-color:var(--good)':''}${editable?'':';cursor:default;opacity:.55'}" onclick="cycleDone('${p.id}',${i})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="opacity:${t.s==='done'?1:0}"><path d="M20 6L9 17l-5-5"/></svg></button>
       <div><div class="trow-title" style="cursor:pointer" onclick="openTask('${p.id}',${i})">${esc(t.t)}</div>${(t.bt||t.blockedBy)?`<div class="trow-sub">⛔ Waiting on: ${esc(blockedLabel(p,t))}</div>`:t.blocks?`<div class="trow-sub" style="color:var(--warn)">↗ Blocks ${esc(t.blocks)}</div>`:''}</div>
-      <div><button class="assignee" onclick="openAssign(event,'${p.id}',${i})">${av(t.a)}${esc(teamName(t.a))}<span class="car">▾</span></button></div>
+      <div>${editable?`<button class="assignee" onclick="openAssign(event,'${p.id}',${i})">${av(t.a)}${esc(teamName(t.a))}<span class="car">▾</span></button>`:`<span class="assignee" style="cursor:default">${av(t.a)}${esc(teamName(t.a))}</span>`}</div>
       <div class="col-due num t-due ${t.due&&new Date(t.due+'T00:00:00')<TODAY&&t.s!=='done'?'over':''}" style="font-size:12.5px;color:var(--ink-2)">${fmtDue(t.due)}</div>
       <div class="col-prio"><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></div>
-      <div><select class="status-sel" onchange="setStatus('${p.id}',${i},this.value)">${ORDER.map(s=>`<option value="${s}" ${t.s===s?'selected':''}>${STATUS[s].label}</option>`).join('')}</select></div>
-    </div>`).join('');
+      <div><select class="status-sel" ${editable?'':'disabled'} onchange="setStatus('${p.id}',${i},this.value)">${ORDER.map(s=>`<option value="${s}" ${t.s===s?'selected':''}>${STATUS[s].label}</option>`).join('')}</select></div>
+    </div>`;}).join('');
 
   document.getElementById('project-detail').innerHTML = `
     <div class="pd-head">
-      <div style="flex:1"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="pd-title">${esc(p.name)}</span><span class="pill ${st[0]}">${st[1]}</span><button class="btn sm" onclick="openCampaignModal('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4z"/></svg>Edit</button></div><div class="pd-desc">${esc(p.desc)}</div></div>
+      <div style="flex:1"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="pd-title">${esc(p.name)}</span><span class="pill ${st[0]}">${st[1]}</span>${isAdminMe()?`<button class="btn sm" onclick="openCampaignModal('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4z"/></svg>Edit</button>`:''}</div><div class="pd-desc">${esc(p.desc)}</div></div>
       <div class="pd-owner"><div class="lbl">Owner</div><span class="chip-person" style="font-size:13.5px">${av(owner)}${esc(teamName(owner))}</span></div>
     </div>
     <div class="metastrip">
@@ -225,20 +232,21 @@ function renderProjectDetail(){
       <div class="addtask-row">
         <form class="addtask-form" id="addtask-form" onsubmit="addTask(event)">
           <input id="nt-title" placeholder="New task name…" required />
-          <select id="nt-assignee">${Object.keys(TEAM).map(k=>`<option value="${k}">${esc(TEAM[k].name)}</option>`).join('')}</select>
+          <select id="nt-assignee">${(isAdminMe()?Object.keys(TEAM):[ME]).map(k=>`<option value="${k}">${esc(teamName(k))}</option>`).join('')}</select>
           <input id="nt-due" type="date" />
           <select id="nt-prio"><option value="high">High</option><option value="med" selected>Medium</option><option value="low">Low</option></select>
           <button class="btn primary sm" type="submit">Add</button>
         </form>
       </div>
     </div>
-    <div class="page-sub" style="margin-top:12px">As owner, <b>${esc(teamName(owner))}</b> can add tasks and reassign any row — click an assignee chip to hand it to a teammate.</div>`;
+    <div class="page-sub" style="margin-top:12px">${isAdminMe()?'As an admin you can edit and reassign any task — click an assignee chip to hand it to a teammate.':'You can update tasks assigned to you; admins manage everything else.'}</div>`;
 }
 function toggleAddTask(){ const f=document.getElementById('addtask-form'); f.classList.toggle('open'); if(f.classList.contains('open')) document.getElementById('nt-title').focus(); }
 async function addTask(e){
   e.preventDefault();
   const p=byId(currentProject);
-  const title=document.getElementById('nt-title').value.trim(), a=document.getElementById('nt-assignee').value, due=document.getElementById('nt-due').value||null, pr=document.getElementById('nt-prio').value;
+  const title=document.getElementById('nt-title').value.trim(), due=document.getElementById('nt-due').value||null, pr=document.getElementById('nt-prio').value;
+  const a = isAdminMe() ? document.getElementById('nt-assignee').value : ME; // base users create tasks for themselves only
   if(!title) return;
   if(LIVE){
     const d=await pInsert('tasks',{project_id:p.id,title,assignee_id:a,due,priority:pr,status:'todo',position:p.tasks.length});
@@ -252,6 +260,7 @@ async function addTask(e){
 }
 function setStatus(id,i,v){
   const p=byId(id), t=p.tasks[i], was=t.s;
+  if(!canEdit(t)){ denyEdit(); rerender(); return; }
   if(was===v) return;
   t.s=v;
   const fields={status:v};
@@ -277,6 +286,7 @@ function autoUnblock(p,doneTask){
 }
 function setBlockedBy(id,i,val){
   const p=byId(id), t=p.tasks[i];
+  if(!canEdit(t)){ denyEdit(); rerender(); return; }
   if(val){
     t.bt=val; t.blockedBy=null;
     if(t.s!=='blocked' && t.s!=='done') t.s='blocked';
@@ -294,6 +304,7 @@ function rerender(){ if(currentProject && isView('project')) renderProjectDetail
 const amenu = document.getElementById('amenu');
 function openAssign(e,id,i){
   e.stopPropagation();
+  if(!canEdit(byId(id).tasks[i])){ denyEdit(); return; }
   const r=e.currentTarget.getBoundingClientRect();
   amenu.innerHTML = `<div class="ah">Assign to</div>`+Object.keys(TEAM).map(k=>`<button onclick="assign('${id}',${i},'${k}')">${av(k)}<span>${esc(TEAM[k].name)}</span><span class="r">${esc(TEAM[k].role.split(' ')[0])}</span></button>`).join('');
   amenu.style.left=Math.min(r.left,window.innerWidth-220)+'px';
@@ -302,6 +313,7 @@ function openAssign(e,id,i){
 }
 function assign(id,i,who){
   const t=byId(id).tasks[i], was=t.a;
+  if(!canEdit(t)){ denyEdit(); return; }
   t.a=who; amenu.classList.remove('open'); rerender();
   if(LIVE) pUpdate('tasks',t.id,{assignee_id:who});
   if(who!==was && who!==ME) notify(who, `${teamName(ME)} assigned you "${t.t}".`, id, t.id);
@@ -377,11 +389,11 @@ function renderDrawer(id,i){
     </div>
     <div class="drawer-body">
       <div class="d-fields">
-        <span class="fl">Assignee</span><span><button class="assignee" onclick="openAssign(event,'${p.id}',${i})">${av(t.a)}${esc(teamName(t.a))}<span class="car">▾</span></button></span>
-        <span class="fl">Status</span><span><select class="status-sel" onchange="setStatus('${p.id}',${i},this.value)">${ORDER.map(s=>`<option value="${s}" ${t.s===s?'selected':''}>${STATUS[s].label}</option>`).join('')}</select></span>
+        <span class="fl">Assignee</span><span>${canEdit(t)?`<button class="assignee" onclick="openAssign(event,'${p.id}',${i})">${av(t.a)}${esc(teamName(t.a))}<span class="car">▾</span></button>`:`<span class="assignee" style="cursor:default">${av(t.a)}${esc(teamName(t.a))}</span>`}</span>
+        <span class="fl">Status</span><span><select class="status-sel" ${canEdit(t)?'':'disabled'} onchange="setStatus('${p.id}',${i},this.value)">${ORDER.map(s=>`<option value="${s}" ${t.s===s?'selected':''}>${STATUS[s].label}</option>`).join('')}</select></span>
         <span class="fl">Due date</span><span class="num t-due ${over?'over':''}" style="font-weight:600">${over?'Overdue · ':''}${fmtDue(t.due)}</span>
         <span class="fl">Priority</span><span><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></span>
-        <span class="fl">Blocked by</span><span><select class="status-sel" style="max-width:100%" onchange="setBlockedBy('${p.id}',${i},this.value)">
+        <span class="fl">Blocked by</span><span><select class="status-sel" style="max-width:100%" ${canEdit(t)?'':'disabled'} onchange="setBlockedBy('${p.id}',${i},this.value)">
           <option value="">— nothing —</option>
           ${p.tasks.filter(x=>x.id!==t.id && x.s!=='done').map(x=>`<option value="${x.id}" ${t.bt===x.id?'selected':''}>${esc(x.t)}</option>`).join('')}
         </select></span>
@@ -392,7 +404,7 @@ function renderDrawer(id,i){
       <div class="d-desc">${esc(t._desc)}</div>
       <div class="d-sec">Subtasks <span class="cnt">${subDone}/${t._sub.length}</span><div class="prog-mini" style="margin-left:auto"><span style="width:${subPct}%"></span></div></div>
       ${t._sub.map((s,si)=>`<div class="subrow ${s.done?'done':''}"><button class="check" style="${s.done?'background:var(--good);border-color:var(--good)':''}" onclick="toggleSub('${p.id}',${i},${si})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="opacity:${s.done?1:0}"><path d="M20 6L9 17l-5-5"/></svg></button><span class="sub-t">${esc(s.t)}</span></div>`).join('')}
-      <form class="subadd" onsubmit="addSub(event,'${p.id}',${i})"><input id="newsub" placeholder="Add a subtask…" /><button class="btn sm" type="submit">Add</button></form>
+      ${canEdit(t)?`<form class="subadd" onsubmit="addSub(event,'${p.id}',${i})"><input id="newsub" placeholder="Add a subtask…" /><button class="btn sm" type="submit">Add</button></form>`:''}
       <div class="d-sec">Attachments</div>
       ${t._links.length? t._links.map(l=>`<a class="att" href="${esc(l.url)}" target="_blank" rel="noopener"><span class="ai"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span><div class="al">${esc(l.label)}</div><div class="as">${esc(l.sub)}</div></span></a>`).join('') : '<div class="att-empty">No files yet — link a SharePoint doc or asset for this task.</div>'}
       <div class="d-sec">Activity</div>
@@ -400,10 +412,11 @@ function renderDrawer(id,i){
       <form class="commentbox" onsubmit="addComment(event,'${p.id}',${i})">${av(ME)}<textarea id="newcomment" placeholder="Write a comment…"></textarea><button class="btn primary sm" type="submit">Post</button></form>
     </div>`;
 }
-function toggleSub(id,i,si){ const s=byId(id).tasks[i]._sub[si]; s.done=!s.done; renderDrawer(id,i); if(LIVE&&s.id) pUpdate('subtasks',s.id,{done:s.done}); }
+function toggleSub(id,i,si){ const t=byId(id).tasks[i]; if(!canEdit(t)){ denyEdit(); return; } const s=t._sub[si]; s.done=!s.done; renderDrawer(id,i); if(LIVE&&s.id) pUpdate('subtasks',s.id,{done:s.done}); }
 async function addSub(e,id,i){
   e.preventDefault(); const v=document.getElementById('newsub').value.trim(); if(!v) return;
   const t=byId(id).tasks[i];
+  if(!canEdit(t)){ denyEdit(); return; }
   if(LIVE){ const d=await pInsert('subtasks',{task_id:t.id,title:v,done:false,position:t._sub.length}); if(d) t._sub.push({id:d.id,t:d.title,done:d.done}); }
   else t._sub.push({t:v,done:false});
   renderDrawer(id,i);
@@ -451,7 +464,7 @@ function renderBoard(id){
       .filter(o=>!FILT.board.a || o.t.a===FILT.board.a)
       .filter(o=>!FILT.board.pr || o.t.pr===FILT.board.pr);
     return `<div class="col" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropCard(event,'${p.id}','${s}')"><div class="col-h"><span class="dot" style="background:${STATUS[s].dot}"></span><span class="name">${STATUS[s].label}</span><span class="n num">${items.length}</span></div>${items.map(({t,idx})=>`
-      <div class="kanban" draggable="true" ondragstart="dragStart(event,'${p.id}',${idx})" ondragend="dragEnd(event)" onclick="cardClick('${p.id}',${idx})" ${s==='blocked'?'style="border-color:color-mix(in srgb, var(--crit) 40%, var(--line))"':''}>
+      <div class="kanban" draggable="${canEdit(t)?'true':'false'}" ondragstart="dragStart(event,'${p.id}',${idx})" ondragend="dragEnd(event)" onclick="cardClick('${p.id}',${idx})" ${s==='blocked'?'style="border-color:color-mix(in srgb, var(--crit) 40%, var(--line))"':''}>
         <div class="kt">${esc(t.t)}</div>
         <div class="kmeta"><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></div>
         ${(t.bt||t.blockedBy)?`<div class="blocked-note"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>${esc(blockedLabel(p,t))}</div>`:''}
@@ -583,8 +596,9 @@ document.addEventListener('click',e=>{ if(!e.target.closest('.search')) document
 /* ===================================================================
    Navigation
    =================================================================== */
-const titles = { dashboard:['Dashboard','Demand Gen campaign portfolio'], mytasks:['My Tasks',"Everything assigned to you, grouped by when it's due"], board:['Board','Kanban view · drag tasks across stages'], projects:['Campaigns','All Demand Gen campaigns and their progress'], project:['Campaign','Tasks, owner & assignments'], calendar:['Calendar','Every task on its due date'], roadblocks:['Roadblocks','Tasks blocked by upstream work or inputs'] };
+const titles = { dashboard:['Dashboard','Demand Gen campaign portfolio'], mytasks:['My Tasks',"Everything assigned to you, grouped by when it's due"], board:['Board','Kanban view · drag tasks across stages'], projects:['Campaigns','All Demand Gen campaigns and their progress'], project:['Campaign','Tasks, owner & assignments'], calendar:['Calendar','Every task on its due date'], team:['Team','People, sign-ins & permissions'], roadblocks:['Roadblocks','Tasks blocked by upstream work or inputs'] };
 function show(view){
+  if(view==='team' && !isAdminMe()) view='dashboard';
   currentView=view;
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.getElementById('view-'+view).classList.add('active');
@@ -597,6 +611,7 @@ function show(view){
   if(view==='board') renderBoard();
   if(view==='projects') renderProjects(currentFilter);
   if(view==='calendar') renderCalendar();
+  if(view==='team') renderTeam();
   if(view==='roadblocks') renderRoadblocks();
   window.scrollTo(0,0);
 }
@@ -614,6 +629,7 @@ function rerenderCurrent(){
 /* ---------- Campaign create / edit modal ---------- */
 let editingProject = null; // null = creating new
 function openCampaignModal(id){
+  if(!isAdminMe()){ toast('Only admins can create or edit campaigns', true); return; }
   editingProject = id;
   const p = id ? byId(id) : null;
   document.getElementById('cm-title').textContent = p ? 'Edit campaign' : 'New campaign';
@@ -638,10 +654,72 @@ function openCampaignModal(id){
 function closeModal(){
   editingProject = null;
   document.getElementById('campaign-modal').classList.remove('open');
+  document.getElementById('user-modal').classList.remove('open');
   document.getElementById('modal-ov').classList.remove('open');
+}
+
+/* ---------- Team management (admins) ---------- */
+const PALETTE=['#0A6CBF','#0E9AA6','#8A4FC2','#C77A0A','#1E9E62','#D64545','#5A67D8','#B7791F','#2C7A7B','#97266D'];
+function renderTeam(){
+  document.getElementById('team-body').innerHTML = Object.keys(TEAM).map(k=>{
+    const m=TEAM[k];
+    const open=PROJECTS.flatMap(p=>p.tasks).filter(t=>t.a===k&&t.s!=='done').length;
+    return `<tr>
+      <td style="width:34px">${av(k)}</td>
+      <td class="proj-name">${esc(m.name)}${k===ME?' <span class="tag">you</span>':''}</td>
+      <td>${esc(m.role||'')}</td>
+      <td><input class="fsel" style="max-width:240px;width:100%" value="${esc(m.email||'')}" placeholder="not set — needed to sign in" onchange="updateMember('${k}','email',this.value.trim())" /></td>
+      <td><select class="fsel" onchange="updateMember('${k}','app_role',this.value)"><option value="user" ${m.appRole!=='admin'?'selected':''}>Base user</option><option value="admin" ${m.appRole==='admin'?'selected':''}>Admin</option></select></td>
+      <td class="num" style="font-weight:700">${open}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('team-note').textContent = LIVE
+    ? "A member's sign-in email must match this list for the app to know who they are. Adding a user creates their login immediately."
+    : 'Demo mode — changes here are not saved.';
+}
+async function updateMember(k,field,val){
+  if(!isAdminMe()){ toast('Admins only', true); renderTeam(); return; }
+  if(field==='app_role' && k===ME && val!=='admin'){ toast("You can't remove your own admin access", true); renderTeam(); return; }
+  TEAM[k][field==='app_role'?'appRole':field] = val || null;
+  if(LIVE) await pUpdate('members', k, {[field]: val || null});
+  renderTeam(); renderMe();
+  toast('Member updated');
+}
+function openUserModal(){
+  if(!isAdminMe()){ toast('Admins only', true); return; }
+  document.getElementById('user-form').reset();
+  document.getElementById('user-modal').classList.add('open');
+  document.getElementById('modal-ov').classList.add('open');
+  document.getElementById('um-name').focus();
+}
+async function saveUser(e){
+  e.preventDefault();
+  if(!isAdminMe()){ toast('Admins only', true); return; }
+  const name=document.getElementById('um-name').value.trim();
+  const init=document.getElementById('um-init').value.trim().toUpperCase();
+  const email=document.getElementById('um-email').value.trim();
+  const pw=document.getElementById('um-pw').value;
+  const appRole=document.getElementById('um-role').value;
+  const title=document.getElementById('um-title').value.trim();
+  if(!/^[A-Z]{2,3}$/.test(init)){ toast('Initials must be 2–3 letters', true); return; }
+  if(TEAM[init]){ toast(`Initials "${init}" are already taken`, true); return; }
+  if(Object.keys(TEAM).some(k=>TEAM[k].email && TEAM[k].email.toLowerCase()===email.toLowerCase())){ toast('That email is already on the team', true); return; }
+  const color=PALETTE.find(c=>!Object.keys(TEAM).some(k=>TEAM[k].color===c)) || PALETTE[Object.keys(TEAM).length % PALETTE.length];
+  if(LIVE){
+    // Create their login via a throwaway client so the admin's session is untouched.
+    const tmp=window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, {auth:{persistSession:false, autoRefreshToken:false, storageKey:'pmpm-invite'}});
+    const {error}=await tmp.auth.signUp({email, password:pw});
+    if(error && !/already (been )?registered/i.test(error.message)){ toast('Could not create login: '+error.message, true); return; }
+    const d=await pInsert('members', {id:init, name, role:title||null, color, email, app_role:appRole, sort:Object.keys(TEAM).length});
+    if(!d) return;
+  }
+  TEAM[init]={name, role:title, color, email, appRole};
+  fillFilterOptions(); refreshCounts(); renderTeam(); closeModal();
+  toast(`${name} added — they can sign in now with the temporary password`);
 }
 async function saveCampaign(e){
   e.preventDefault();
+  if(!isAdminMe()){ toast('Only admins can create or edit campaigns', true); return; }
   const v = id => document.getElementById(id).value.trim();
   const fields = {
     name: v('cm-name'), description: v('cm-desc'), owner_id: v('cm-owner'), status: v('cm-status'),
@@ -676,9 +754,11 @@ async function saveCampaign(e){
 function renderMe(){
   const m=TEAM[ME]||{name:'—',role:'',color:'#7688A0'};
   document.getElementById('sidebar-foot').innerHTML = `
-    <div class="me"><div class="avatar" style="background:${m.color}">${esc(ME||'?')}</div><div style="flex:1"><div class="me-name">${esc(m.name)}</div><div class="me-role">${esc(m.role)}</div></div>
+    <div class="me"><div class="avatar" style="background:${m.color}">${esc(ME||'?')}</div><div style="flex:1"><div class="me-name">${esc(m.name)} ${isAdminMe()?'<span class="tag" style="font-size:9.5px;padding:1px 6px">ADMIN</span>':''}</div><div class="me-role">${esc(m.role)}</div></div>
     ${LIVE?`<button class="icon-btn" title="Sign out" onclick="signOut()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>`:''}</div>
     ${!LIVE?`<button class="whoami" onclick="identify()">Viewing as ${esc(m.name)} · switch</button>`:''}`;
+  document.getElementById('nav-team').style.display = isAdminMe() ? '' : 'none';
+  document.getElementById('btn-new').style.display  = isAdminMe() ? '' : 'none';
 }
 function identify(){
   const codes=Object.keys(TEAM);
@@ -744,7 +824,7 @@ async function seedNow(){
   const S=window.PMPM_SEED;
   toast('Importing campaigns…');
   document.getElementById('seed-banner').style.display='none';
-  const up=await sb.from('members').upsert(S.members.map((m,i)=>({id:m.id,name:m.name,role:m.role,color:m.color,email:m.email||null,sort:i})));
+  const up=await sb.from('members').upsert(S.members.map((m,i)=>({id:m.id,name:m.name,role:m.role,color:m.color,email:m.email||null,app_role:m.app_role||'user',sort:i})));
   if(up.error){ toast('Seed failed: '+up.error.message,true); return; }
   for(const [pi,p] of S.projects.entries()){
     const pr=await sb.from('projects').upsert({id:p.id,name:p.name,description:p.desc,segment:p.segment,motion:p.motion,solution:p.solution,pipeline:p.pipeline,value:p.value,audience:p.audience,launch:p.launch,status:p.status,owner_id:S.owner[p.id],blocker:p.blocker||null,sort:pi});

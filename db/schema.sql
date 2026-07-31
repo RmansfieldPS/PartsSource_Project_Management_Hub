@@ -8,12 +8,13 @@ create extension if not exists "pgcrypto";
 
 -- ---------- Tables ----------
 create table if not exists members (
-  id     text primary key,           -- initials, e.g. 'RM'
-  name   text not null,
-  role   text,
-  color  text,
-  email  text,
-  sort   int default 0
+  id       text primary key,         -- initials, e.g. 'RM'
+  name     text not null,
+  role     text,                     -- job title, e.g. 'Lifecycle Manager'
+  color    text,
+  email    text,                     -- must match their sign-in email
+  app_role text default 'user' check (app_role in ('admin','user')),
+  sort     int default 0
 );
 
 create table if not exists projects (
@@ -86,8 +87,10 @@ create table if not exists notifications (
 );
 
 -- ---------- Row Level Security ----------
--- Internal, trusted team: any signed-in user can read & write.
--- Anonymous (not signed in) users get nothing.
+-- Roles: 'admin' edits everything and manages users; 'user' edits only
+-- tasks assigned to them. Identity = sign-in email matched to members.email.
+-- Full role policies live in db/upgrade-roles.sql — run it right after this
+-- file on a fresh install:
 alter table members       enable row level security;
 alter table projects      enable row level security;
 alter table tasks         enable row level security;
@@ -95,15 +98,7 @@ alter table subtasks      enable row level security;
 alter table comments      enable row level security;
 alter table attachments   enable row level security;
 alter table notifications enable row level security;
-
-do $$
-declare t text;
-begin
-  foreach t in array array['members','projects','tasks','subtasks','comments','attachments','notifications'] loop
-    execute format('drop policy if exists "auth_all" on %I', t);
-    execute format('create policy "auth_all" on %I for all to authenticated using (true) with check (true)', t);
-  end loop;
-end $$;
+-- (upgrade-roles.sql creates the helper functions and per-table policies.)
 
 -- ---------- Realtime ----------
 -- Push live changes to every connected client.

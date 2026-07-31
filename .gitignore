@@ -1,0 +1,9 @@
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.tmp
+~$*
+.vscode/
+
+# Note: js/config.js IS committed on purpose — the Supabase anon key is a public
+# client key and the database is protected by Row Level Security.

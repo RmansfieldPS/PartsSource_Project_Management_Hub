@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PMPM — PartsSource Marketing Project Management</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230A6CBF'/%3E%3Ctext x='50' y='68' font-size='52' font-family='Segoe UI,Arial' font-weight='bold' fill='white' text-anchor='middle'%3EPS%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+
+  <!-- ===== Login (live mode only) ===== -->
+  <div class="auth-overlay" id="auth-overlay">
+    <div class="auth-card">
+      <div class="auth-brand"><div class="brand-mark">PS</div><div><div class="brand-name">PMPM</div><div class="brand-sub">Demand Gen PM</div></div></div>
+      <h2 id="auth-title">Sign in</h2>
+      <div class="sub">PartsSource Marketing project management</div>
+      <form onsubmit="authSubmit(event)">
+        <label>Work email</label>
+        <input id="auth-email" type="email" autocomplete="username" placeholder="you@partssource.com" required />
+        <label>Password</label>
+        <input id="auth-pw" type="password" autocomplete="current-password" placeholder="••••••••" required />
+        <button class="btn primary" id="auth-submit" type="submit">Sign in</button>
+        <div class="auth-err" id="auth-err"></div>
+      </form>
+      <button class="auth-toggle" id="auth-toggle" onclick="toggleAuthMode()">Need an account? Sign up</button>
+    </div>
+  </div>
+
+  <!-- ===== App ===== -->
+  <div class="app" id="app-root">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">PS</div>
+        <div><div class="brand-name">PMPM</div><div class="brand-sub">Demand Gen PM</div></div>
+      </div>
+      <nav class="nav" id="nav">
+        <button class="nav-item active" data-view="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>Dashboard</button>
+        <button class="nav-item" data-view="mytasks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>My Tasks <span class="count" id="c-mine">0</span></button>
+        <button class="nav-item" data-view="board"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18"/></svg>Board</button>
+        <button class="nav-item" data-view="projects"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>Campaigns <span class="count" id="c-proj">0</span></button>
+        <button class="nav-item" data-view="roadblocks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Roadblocks <span class="count" id="c-rb">0</span></button>
+        <div class="nav-label">Coming soon</div>
+        <button class="nav-item disabled"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Calendar <span class="soon">soon</span></button>
+        <button class="nav-item disabled"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>Timeline <span class="soon">soon</span></button>
+      </nav>
+      <div class="sidebar-foot" id="sidebar-foot"></div>
+    </aside>
+
+    <div class="main">
+      <div class="topbar">
+        <div>
+          <div style="display:flex;align-items:center;gap:10px"><div class="page-title" id="pageTitle">Dashboard</div><span class="mode-badge demo" id="mode-badge">Demo</span></div>
+          <div class="page-sub" id="pageSub">Demand Gen campaign portfolio</div>
+        </div>
+        <label class="search" style="margin-left:auto"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg><input placeholder="Search campaigns & tasks…" /></label>
+        <button class="btn primary" onclick="createProjectFlow()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New</button>
+      </div>
+
+      <div class="content">
+        <!-- banners -->
+        <div class="banner info" id="demo-banner" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          <span><b>Demo mode.</b> Changes aren't saved and you're the only viewer. Add your Supabase keys in <b>js/config.js</b> to make it a live, shared app.</span>
+        </div>
+        <div class="banner info" id="seed-banner" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
+          <span style="flex:1">This database is empty. Import your <b>real Demand Gen campaigns</b> and team to get started.</span>
+          <button class="btn primary sm" onclick="seedNow()">Import sample campaigns</button>
+        </div>
+
+        <!-- DASHBOARD -->
+        <section class="view active" id="view-dashboard">
+          <div class="kpis">
+            <div class="kcard"><div class="k-top"><span class="k-ic" style="background:var(--accent-soft);color:var(--accent)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg></span> Active Campaigns</div><div class="k-val num" id="kpi-active">0</div><div class="k-foot"><span class="trend-up">▲ 2</span> vs. last month</div></div>
+            <div class="kcard"><div class="k-top"><span class="k-ic" style="background:var(--good-soft);color:var(--good)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg></span> Projected Pipeline</div><div class="k-val num">$4.7M</div><div class="k-foot">across active campaigns</div></div>
+            <div class="kcard"><div class="k-top"><span class="k-ic" style="background:var(--crit-soft);color:var(--crit)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/></svg></span> Roadblocks</div><div class="k-val num" id="kpi-rb" style="color:var(--crit)">0</div><div class="k-foot">tasks blocked upstream</div></div>
+            <div class="kcard"><div class="k-top"><span class="k-ic" style="background:var(--good-soft);color:var(--good)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg></span> Completed 2026</div><div class="k-val num" id="kpi-done">0</div><div class="k-foot">Q2 Blitz + TechNation</div></div>
+          </div>
+          <div class="dash-grid">
+            <div style="display:flex;flex-direction:column;gap:20px">
+              <div class="card">
+                <div class="card-h"><h3>Active Campaigns</h3><button class="link" data-jump="projects">View all →</button></div>
+                <div style="overflow-x:auto"><table><thead><tr><th>Campaign</th><th>Owner</th><th>Motion</th><th>Progress</th><th>Launch</th><th>Status</th></tr></thead><tbody id="dash-active"></tbody></table></div>
+              </div>
+              <div class="card"><div class="card-h"><h3>Team Workload</h3><span class="page-sub" style="margin-left:auto">open tasks</span></div><div id="workload" style="padding:6px 18px 16px"></div></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:20px">
+              <div class="card"><div class="card-h"><h3>Upcoming Launches & Deadlines</h3></div><div id="deadlines"></div></div>
+              <div class="card">
+                <div class="card-h"><h3>On-Time Completion</h3><span class="pill good plain" style="margin-left:auto">86%</span></div>
+                <div style="padding:8px 18px 18px">
+                  <svg viewBox="0 0 300 70" width="100%" height="70" preserveAspectRatio="none" style="display:block"><defs><linearGradient id="spark" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".28"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs><path d="M0,50 L50,44 L100,48 L150,30 L200,34 L250,18 L300,22 L300,70 L0,70 Z" fill="url(#spark)"/><path d="M0,50 L50,44 L100,48 L150,30 L200,34 L250,18 L300,22" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="300" cy="22" r="4" fill="var(--accent)"/></svg>
+                  <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-3);font-weight:600;margin-top:4px"><span>Feb</span><span>Apr</span><span>Jun</span><span>Jul</span></div>
+                </div>
+              </div>
+              <div class="card"><div class="card-h"><h3>Recently Completed</h3></div><div id="completed-list" style="padding:4px 18px 14px"></div></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- MY TASKS -->
+        <section class="view" id="view-mytasks">
+          <div class="banner info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 2"/></svg><span id="mytasks-banner-text"></span></div>
+          <div id="mytasks-body"></div>
+        </section>
+
+        <!-- BOARD -->
+        <section class="view" id="view-board">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+            <select class="proj-pick" id="board-pick" onchange="renderBoard(this.value)"></select>
+            <span class="page-sub" style="margin-left:auto">Click a card to open it · updates live for everyone</span>
+          </div>
+          <div style="overflow-x:auto;padding-bottom:8px"><div class="board" id="board" style="min-width:940px"></div></div>
+        </section>
+
+        <!-- CAMPAIGNS -->
+        <section class="view" id="view-projects">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+            <div class="seg" id="proj-filter"><button class="on" data-f="active">Active</button><button data-f="planning">In Planning</button><button data-f="complete">Completed</button><button data-f="all">All</button></div>
+            <span class="page-sub" style="margin-left:auto">Click any campaign to open its tasks</span>
+          </div>
+          <div class="proj-grid" id="proj-grid"></div>
+        </section>
+
+        <!-- CAMPAIGN DETAIL -->
+        <section class="view" id="view-project">
+          <button class="backbtn" onclick="show('projects')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>All campaigns</button>
+          <div id="project-detail"></div>
+        </section>
+
+        <!-- ROADBLOCKS -->
+        <section class="view" id="view-roadblocks">
+          <div class="banner crit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span id="rb-banner-text"></span></div>
+          <div id="roadblocks-body"></div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <div class="drawer-ov" id="drawer-ov" onclick="closeDrawer()"></div>
+  <aside class="drawer" id="drawer"></aside>
+  <div class="amenu" id="amenu"></div>
+  <div class="toast" id="toast"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/config.js"></script>
+  <script src="js/seed-data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

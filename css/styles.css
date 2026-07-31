@@ -404,6 +404,29 @@ select.proj-pick { border: 1px solid var(--line-strong); background: var(--surfa
 .rolemap-row .rl { width: 190px; font-size: 12px; font-weight: 650; color: var(--ink-2); }
 .rolemap-row select { flex: 1; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); border-radius: 7px; padding: 6px 8px; font-size: 12.5px; font-family: inherit; }
 
+/* Timeline */
+.tl-scroll { overflow-x: auto; }
+#tl-inner { position: relative; min-width: 100%; }
+.tl-row { display: flex; height: 38px; border-bottom: 1px solid var(--line); }
+.tl-row:last-child { border-bottom: none; }
+.tl-headrow { height: 34px; }
+.tl-label { width: 230px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 12.5px; font-weight: 600; position: sticky; left: 0; background: var(--surface); z-index: 5; border-right: 1px solid var(--line); white-space: nowrap; overflow: hidden; }
+.tl-lt { overflow: hidden; text-overflow: ellipsis; }
+.tl-done { text-decoration: line-through; color: var(--ink-3); }
+.tl-track { position: relative; flex: none; background-image: linear-gradient(to right, var(--line) 1px, transparent 1px); }
+.tl-headrow .tl-track { display: flex; background-image: none; }
+.tl-month { flex: none; font-size: 10.5px; font-weight: 700; color: var(--ink-3); text-transform: uppercase; letter-spacing: .5px; padding: 10px 0 0 8px; border-left: 1px solid var(--line-strong); overflow: hidden; white-space: nowrap; }
+.tl-bar { position: absolute; top: 8px; height: 22px; border-radius: 6px; border: 1px solid; overflow: hidden; cursor: pointer; }
+.tl-bar span { display: block; height: 100%; opacity: .5; }
+.tl-bar:hover { filter: brightness(1.06); }
+.tl-flag { position: absolute; top: 2px; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 8px solid var(--ink-2); transform: translateX(-5px); z-index: 3; }
+.tl-marker { position: absolute; top: 12px; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--line-strong); cursor: pointer; z-index: 3; }
+.tl-marker.draggable { cursor: grab; }
+.tl-marker.dragging { cursor: grabbing; z-index: 10; box-shadow: 0 0 0 4px var(--accent-soft), 0 0 0 5px var(--accent); }
+.tl-svg { position: absolute; pointer-events: none; z-index: 2; }
+.tl-svg path { fill: none; stroke: var(--ink-3); stroke-width: 1.5; opacity: .55; }
+.tl-todayline { position: absolute; width: 2px; background: var(--crit); opacity: .5; z-index: 4; pointer-events: none; }
+
 /* Toast */
 .toast { position: fixed; bottom: 22px; left: 50%; transform: translate(-50%, 20px); background: var(--ink); color: var(--surface); padding: 11px 18px; border-radius: 10px; font-size: 13px; font-weight: 600; box-shadow: 0 10px 30px rgba(0,0,0,.25); opacity: 0; pointer-events: none; transition: .25s; z-index: 300; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }

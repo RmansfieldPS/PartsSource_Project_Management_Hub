@@ -24,9 +24,12 @@ let ME = null;        // current member code
 let NOTIFS = [];      // in-app notifications (all members; filtered to ME on render)
 let demoSeq = 0;
 let currentProject = null, currentTask = null, currentFilter = 'active', currentView = 'dashboard';
-let FILT = { board:{a:'',pr:''}, proj:{motion:'',owner:'',segment:''}, cal:{a:'',proj:''} };
+let FILT = { board:{a:'',pr:''}, proj:{motion:'',owner:'',segment:''}, cal:{a:'',proj:''}, tl:{owner:'',motion:'',a:''} };
 let TEMPLATES = [];   // campaign templates library
 let editingTpl = null;
+let tlMode = 'portfolio', tlProject = null;
+let HAS_LDATE = true; // projects.launch_date column present (false until upgrade-timeline.sql runs)
+const TL_PPD = 16, TL_LABELW = 230, TL_ROWH = 38, TL_HEADH = 34;
 let calY = TODAY.getFullYear(), calM = TODAY.getMonth();
 
 /* ---------- Helpers ---------- */
@@ -126,9 +129,10 @@ async function loadLive(){
     const tr = await sb.from('templates').select('*').order('created_at');
     TEMPLATES = tr.error ? [] : (tr.data||[]).map(r=>({id:r.id, name:r.name, description:r.description||'', defaults:r.defaults||{}, steps:r.steps||[], by:r.created_by}));
   } catch(_) { TEMPLATES = []; }
+  HAS_LDATE = (prj.data && prj.data.length) ? ('launch_date' in prj.data[0]) : true;
   PROJECTS = (prj.data||[]).map(p => ({
     id:p.id, name:p.name, desc:p.description, segment:p.segment, motion:p.motion, solution:p.solution,
-    pipeline:p.pipeline, value:p.value, audience:p.audience, launch:p.launch, status:p.status,
+    pipeline:p.pipeline, value:p.value, audience:p.audience, launch:p.launch, launchDate:p.launch_date||null, status:p.status,
     blocker:p.blocker, owner:p.owner_id, tasks:tBy[p.id]||[], _files:pfBy[p.id]||[]
   }));
 }
@@ -845,13 +849,162 @@ function renderCalendar(){
   document.getElementById('cal-grid').innerHTML = html;
 }
 
+/* ===================================================================
+   RENDER — Timeline (portfolio bars + per-campaign milestones)
+   =================================================================== */
+function todayISO(){ const pad=n=>String(n).padStart(2,'0'); return `${TODAY.getFullYear()}-${pad(TODAY.getMonth()+1)}-${pad(TODAY.getDate())}`; }
+function addDaysISO(iso,days){ const d=new Date(iso+'T00:00:00'); d.setDate(d.getDate()+days); const pad=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
+function tlRange(dates){
+  let min=null,max=null;
+  dates.forEach(d=>{ if(!d) return; if(!min||d<min)min=d; if(!max||d>max)max=d; });
+  const t=todayISO();
+  if(!min||t<min) min=t;
+  if(!max||t>max) max=t;
+  const s=new Date(min+'T00:00:00'); s.setDate(s.getDate()-7); s.setDate(s.getDate()-s.getDay()); // pad + snap to Sunday
+  const e=new Date(max+'T00:00:00'); e.setDate(e.getDate()+14);
+  return { start:s, days: Math.max(28, Math.ceil((e-s)/86400000)+1) };
+}
+function tlX(iso,R){ return Math.round((new Date(iso+'T00:00:00')-R.start)/86400000)*TL_PPD; }
+function tlMonths(R){
+  let html='', d=new Date(R.start), remaining=R.days;
+  while(remaining>0){
+    const dim=new Date(d.getFullYear(), d.getMonth()+1, 0).getDate();
+    const span=Math.min(dim-d.getDate()+1, remaining);
+    const w=span*TL_PPD;
+    html+=`<div class="tl-month" style="width:${w}px">${w>76?MONTHS[d.getMonth()]+' '+d.getFullYear():(w>34?MONTHS[d.getMonth()]:'')}</div>`;
+    d=new Date(d.getFullYear(), d.getMonth()+1, 1);
+    remaining-=span;
+  }
+  return html;
+}
+function tlToday(){ const R=document.getElementById('tl-inner')._range; if(R) document.getElementById('tl-scroll').scrollLeft=Math.max(0, tlX(todayISO(),R)-260); }
+function renderTimeline(){
+  const single = tlMode==='campaign';
+  document.getElementById('tl-pick').style.display = single?'':'none';
+  document.getElementById('tl-filt-portfolio').style.display = single?'none':'';
+  document.getElementById('tl-filt-campaign').style.display = single?'':'none';
+  const pick=document.getElementById('tl-pick');
+  pick.innerHTML = PROJECTS.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  if(!byId(tlProject)) tlProject=(PROJECTS.find(p=>p.status==='active')||PROJECTS[0]||{}).id||null;
+  if(tlProject) pick.value=tlProject;
+  document.getElementById('tl-fo').classList.toggle('on',!!FILT.tl.owner);
+  document.getElementById('tl-fm').classList.toggle('on',!!FILT.tl.motion);
+  document.getElementById('tl-fa').classList.toggle('on',!!FILT.tl.a);
+  document.getElementById('tl-hint').textContent = single ? 'Drag a marker to change its due date · click to open the task' : "Bars span each campaign's dated work · ⚑ = launch date";
+  const inner=document.getElementById('tl-inner');
+  if(single) renderTlCampaign(inner); else renderTlPortfolio(inner);
+  tlToday();
+}
+function renderTlPortfolio(inner){
+  const list=PROJECTS
+    .filter(p=>!FILT.tl.owner || ownerOf(p)===FILT.tl.owner)
+    .filter(p=>!FILT.tl.motion || p.motion===FILT.tl.motion);
+  const rows=[], undated=[], allDates=[];
+  list.forEach(p=>{
+    const ds=p.tasks.filter(t=>t.due).map(t=>t.due);
+    if(p.launchDate) ds.push(p.launchDate);
+    if(ds.length){ rows.push({p, min:ds.reduce((a,b)=>a<b?a:b), max:ds.reduce((a,b)=>a>b?a:b)}); allDates.push(...ds); }
+    else undated.push(p);
+  });
+  rows.sort((a,b)=>a.min<b.min?-1:1);
+  const R=tlRange(allDates); inner._range=R;
+  const trackW=R.days*TL_PPD;
+  const colorFor={active:'var(--accent)', atrisk:'var(--crit)', planning:'var(--ink-3)', review:'var(--warn)', complete:'var(--good)'};
+  inner.style.width=(TL_LABELW+trackW)+'px';
+  inner.innerHTML=`
+    <div class="tl-row tl-headrow"><div class="tl-label" style="font-size:10.5px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.5px">Campaign</div><div class="tl-track" style="width:${trackW}px">${tlMonths(R)}</div></div>
+    ${rows.map(({p,min,max})=>{
+      const st=projStatus(p), pr=progress(p);
+      const x1=tlX(min,R), w=Math.max(tlX(max,R)-x1, TL_PPD)+8;
+      return `<div class="tl-row"><div class="tl-label" style="cursor:pointer;${st==='complete'?'color:var(--ink-3)':''}" onclick="openProject('${p.id}')" title="${esc(p.name)}">${esc(p.name)}</div>
+        <div class="tl-track" style="width:${trackW}px;background-size:${TL_PPD*7}px 100%">
+          <div class="tl-bar" onclick="openProject('${p.id}')" title="${esc(p.name)} · ${fmtDue(min)} – ${fmtDue(max)} · ${pr.pct}% done" style="left:${x1}px;width:${w}px;border-color:${colorFor[st]};background:color-mix(in srgb, ${colorFor[st]} 16%, transparent);${st==='complete'?'opacity:.55':''}"><span style="width:${pr.pct}%;background:${colorFor[st]}"></span></div>
+          ${p.launchDate?`<div class="tl-flag" style="left:${tlX(p.launchDate,R)}px" title="Launch · ${fmtDue(p.launchDate)}"></div>`:''}
+        </div></div>`;
+    }).join('')}
+    <div class="tl-todayline" style="left:${TL_LABELW+tlX(todayISO(),R)}px;top:${TL_HEADH}px;height:${rows.length*TL_ROWH}px"></div>
+    ${undated.length?`<div class="tl-row" style="height:auto;min-height:${TL_ROWH}px"><div class="tl-label" style="color:var(--ink-3)">No dated work yet</div><div class="tl-track" style="width:${trackW}px;display:flex;align-items:center;gap:8px;padding:6px 10px;flex-wrap:wrap;background-image:none">${undated.map(p=>`<span class="tag" style="cursor:pointer" onclick="openProject('${p.id}')">${esc(p.name)}</span>`).join('')}</div></div>`:''}`;
+}
+function renderTlCampaign(inner){
+  const p=byId(tlProject);
+  if(!p){ inner.innerHTML='<div style="padding:20px;color:var(--ink-3)">No campaign selected.</div>'; inner._range=null; return; }
+  const items=p.tasks.map((t,i)=>({t,i})).filter(x=>!FILT.tl.a || x.t.a===FILT.tl.a);
+  const dated=items.filter(x=>x.t.due).sort((a,b)=>a.t.due<b.t.due?-1:1);
+  const undated=items.filter(x=>!x.t.due);
+  const R=tlRange(dated.map(x=>x.t.due)); inner._range=R;
+  const trackW=R.days*TL_PPD;
+  inner.style.width=(TL_LABELW+trackW)+'px';
+  const rowOf={}; dated.forEach((x,ri)=>rowOf[x.t.id]=ri);
+  let paths='';
+  dated.forEach((x,ri)=>{
+    if(x.t.bt && rowOf[x.t.bt]!=null){
+      const ur=rowOf[x.t.bt], up=dated[ur].t;
+      const x1=tlX(up.due,R)+8, y1=ur*TL_ROWH+TL_ROWH/2, x2=tlX(x.t.due,R)-10, y2=ri*TL_ROWH+TL_ROWH/2;
+      paths+=`<path marker-end="url(#tlarrow)" d="M ${x1} ${y1} C ${x1+28} ${y1}, ${x2-28} ${y2}, ${x2} ${y2}" />`;
+    }
+  });
+  const t0=todayISO();
+  inner.innerHTML=`
+    <div class="tl-row tl-headrow"><div class="tl-label" style="font-size:10.5px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.5px">Task</div><div class="tl-track" style="width:${trackW}px">${tlMonths(R)}</div></div>
+    ${dated.map(({t,i})=>{
+      const over=t.due<t0 && t.s!=='done';
+      const col=t.s==='done'?'var(--good)':(over?'var(--crit)':STATUS[t.s].dot);
+      return `<div class="tl-row"><div class="tl-label" style="cursor:pointer" onclick="openTask('${p.id}',${i})" title="${esc(t.t)}">${av(t.a)}<span class="tl-lt ${t.s==='done'?'tl-done':''}">${esc(t.t)}</span></div>
+        <div class="tl-track" style="width:${trackW}px;background-size:${TL_PPD*7}px 100%">
+          <div class="tl-marker ${canEdit(t)?'draggable':''}" data-pid="${p.id}" data-idx="${i}" onpointerdown="tlDragStart(event)" onpointermove="tlDragMove(event)" onpointerup="tlDragEnd(event)" onclick="tlMarkerClick(event,'${p.id}',${i})" style="left:${tlX(t.due,R)-7}px;background:${col}" title="${esc(t.t)} · due ${fmtDue(t.due)} · ${esc(teamName(t.a))}"></div>
+        </div></div>`;
+    }).join('')}
+    <svg class="tl-svg" style="left:${TL_LABELW}px;top:${TL_HEADH}px;width:${trackW}px;height:${dated.length*TL_ROWH}px" viewBox="0 0 ${trackW} ${dated.length*TL_ROWH}"><defs><marker id="tlarrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ink-3)" opacity=".7"/></marker></defs>${paths}</svg>
+    <div class="tl-todayline" style="left:${TL_LABELW+tlX(t0,R)}px;top:${TL_HEADH}px;height:${dated.length*TL_ROWH}px"></div>
+    ${undated.map(({t,i})=>`<div class="tl-row"><div class="tl-label" style="cursor:pointer;color:var(--ink-3)" onclick="openTask('${p.id}',${i})">${av(t.a)}<span class="tl-lt">${esc(t.t)}</span></div><div class="tl-track" style="width:${trackW}px;background-image:none;display:flex;align-items:center;padding-left:10px;color:var(--ink-3);font-size:12px">no due date</div></div>`).join('')}`;
+}
+
+/* ---------- Timeline drag-to-reschedule ---------- */
+let tlDrag=null, tlSuppress=false;
+function tlDragStart(e){
+  const el=e.currentTarget;
+  if(!el.classList.contains('draggable')) return;
+  e.preventDefault();
+  el.setPointerCapture(e.pointerId);
+  const pid=el.dataset.pid, idx=+el.dataset.idx;
+  tlDrag={pid, idx, el, x0:e.clientX, days:0, orig:byId(pid).tasks[idx].due};
+  el.classList.add('dragging');
+}
+function tlDragMove(e){
+  if(!tlDrag || tlDrag.el!==e.currentTarget) return;
+  const days=Math.round((e.clientX-tlDrag.x0)/TL_PPD);
+  if(days!==tlDrag.days){
+    tlDrag.days=days;
+    tlDrag.el.style.transform=`translateX(${days*TL_PPD}px)`;
+    tlDrag.el.title='Due '+fmtDue(addDaysISO(tlDrag.orig,days));
+  }
+}
+function tlDragEnd(e){
+  if(!tlDrag || tlDrag.el!==e.currentTarget) return;
+  const {pid,idx,days,orig,el}=tlDrag;
+  el.classList.remove('dragging'); el.style.transform='';
+  tlDrag=null;
+  if(!days) return;
+  tlSuppress=true; setTimeout(()=>tlSuppress=false,120);
+  const t=byId(pid).tasks[idx];
+  if(!canEdit(t)){ denyEdit(); return; }
+  t.due=addDaysISO(orig,days);
+  if(LIVE) pUpdate('tasks',t.id,{due:t.due});
+  toast(`"${t.t}" moved to ${fmtDue(t.due)}`);
+  renderTimeline();
+}
+function tlMarkerClick(e,pid,idx){ if(tlSuppress) return; openTask(pid,idx); }
+
 /* ---------- Filter select options (members are static per session) ---------- */
 function fillFilterOptions(){
   const mem = k => Object.keys(TEAM).map(c=>`<option value="${c}">${esc(TEAM[c].name)}</option>`).join('');
   document.getElementById('board-fa').innerHTML = `<option value="">All assignees</option>`+mem();
   document.getElementById('cal-fa').innerHTML   = `<option value="">All assignees</option>`+mem();
   document.getElementById('proj-fo').innerHTML  = `<option value="">All owners</option>`+mem();
+  document.getElementById('tl-fo').innerHTML    = `<option value="">All owners</option>`+mem();
+  document.getElementById('tl-fa').innerHTML    = `<option value="">All assignees</option>`+mem();
   document.getElementById('board-fa').value=FILT.board.a; document.getElementById('cal-fa').value=FILT.cal.a; document.getElementById('proj-fo').value=FILT.proj.owner;
+  document.getElementById('tl-fo').value=FILT.tl.owner; document.getElementById('tl-fa').value=FILT.tl.a;
 }
 
 /* ===================================================================
@@ -881,7 +1034,7 @@ document.addEventListener('click',e=>{ if(!e.target.closest('.search')) document
 /* ===================================================================
    Navigation
    =================================================================== */
-const titles = { dashboard:['Dashboard','Demand Gen campaign portfolio'], mytasks:['My Tasks',"Everything assigned to you, grouped by when it's due"], board:['Board','Kanban view · drag tasks across stages'], projects:['Campaigns','All Demand Gen campaigns and their progress'], project:['Campaign','Tasks, owner & assignments'], calendar:['Calendar','Every task on its due date'], team:['Team','People, sign-ins & permissions'], templates:['Templates','Reusable campaign playbooks'], roadblocks:['Roadblocks','Tasks blocked by upstream work or inputs'] };
+const titles = { dashboard:['Dashboard','Demand Gen campaign portfolio'], mytasks:['My Tasks',"Everything assigned to you, grouped by when it's due"], board:['Board','Kanban view · drag tasks across stages'], projects:['Campaigns','All Demand Gen campaigns and their progress'], project:['Campaign','Tasks, owner & assignments'], calendar:['Calendar','Every task on its due date'], timeline:['Timeline','Campaigns and tasks across time'], team:['Team','People, sign-ins & permissions'], templates:['Templates','Reusable campaign playbooks'], roadblocks:['Roadblocks','Tasks blocked by upstream work or inputs'] };
 function show(view){
   if((view==='team'||view==='templates') && !isAdminMe()) view='dashboard';
   currentView=view;
@@ -896,6 +1049,7 @@ function show(view){
   if(view==='board') renderBoard();
   if(view==='projects') renderProjects(currentFilter);
   if(view==='calendar') renderCalendar();
+  if(view==='timeline') renderTimeline();
   if(view==='team') renderTeam();
   if(view==='templates') renderTemplates();
   if(view==='roadblocks') renderRoadblocks();
@@ -931,6 +1085,7 @@ function openCampaignModal(id){
   document.getElementById('cm-pipeline').value = p ? (p.pipeline||'') : '';
   document.getElementById('cm-value').value    = p ? (p.value||'') : '';
   document.getElementById('cm-launch').value   = p ? (p.launch||'') : '';
+  document.getElementById('cm-launchdate').value = p ? (p.launchDate||'') : '';
   document.getElementById('cm-audience').value = p ? (p.audience||'') : '';
   document.getElementById('cm-blocker').value  = p ? (p.blocker||'') : '';
   // template picker: creation only
@@ -951,6 +1106,7 @@ function roleDefault(role){
 function applyTemplateChoice(){
   const tpl = tplById(document.getElementById('cm-template').value);
   document.getElementById('cm-ldate-wrap').style.display = tpl ? '' : 'none';
+  document.getElementById('cm-launchdate').closest('.mfield').style.display = tpl ? 'none' : ''; // template flow has its own launch date input
   const rm=document.getElementById('cm-rolemap');
   rm.style.display = tpl ? '' : 'none';
   if(!tpl){ rm.innerHTML=''; return; }
@@ -1040,12 +1196,14 @@ async function saveCampaign(e){
     value: v('cm-value'), launch: v('cm-launch'), audience: v('cm-audience'), blocker: v('cm-blocker') || null
   };
   if(!fields.name) return;
+  const ldInput = document.getElementById('cm-launchdate').value || null;
   if(editingProject){
     const p = byId(editingProject);
+    if(HAS_LDATE) fields.launch_date = ldInput;
     if(LIVE) await pUpdate('projects', p.id, fields);
     Object.assign(p, { name:fields.name, desc:fields.description, owner:fields.owner_id, status:fields.status,
       motion:fields.motion, segment:fields.segment, solution:fields.solution, pipeline:fields.pipeline,
-      value:fields.value, launch:fields.launch, audience:fields.audience, blocker:fields.blocker });
+      value:fields.value, launch:fields.launch, launchDate:ldInput, audience:fields.audience, blocker:fields.blocker });
     closeModal(); renderBoardPicker(); refreshCounts();
     if(isView('project') && currentProject===p.id) renderProjectDetail(); else show(currentView);
     toast('Campaign updated');
@@ -1055,12 +1213,14 @@ async function saveCampaign(e){
     const roleMap = {};
     document.querySelectorAll('#cm-rolemap select[data-role]').forEach(s=>roleMap[s.dataset.role]=s.value);
     if(tpl && ldate && !fields.launch) fields.launch = 'Launches '+fmtDue(ldate);
+    const launchDate = tpl ? (ldate||ldInput) : ldInput;
+    if(HAS_LDATE) fields.launch_date = launchDate;
     let id;
     if(LIVE){ const d=await pInsert('projects', {...fields, sort:PROJECTS.length}); if(!d) return; id=d.id; }
     else id='d'+(++demoSeq)+Date.now();
     PROJECTS.push({ id, name:fields.name, desc:fields.description, owner:fields.owner_id, status:fields.status,
       motion:fields.motion, segment:fields.segment, solution:fields.solution, pipeline:fields.pipeline,
-      value:fields.value, launch:fields.launch, audience:fields.audience, blocker:fields.blocker, tasks:[], _files:[] });
+      value:fields.value, launch:fields.launch, launchDate, audience:fields.audience, blocker:fields.blocker, tasks:[], _files:[] });
     closeModal();
     if(tpl){ toast('Building campaign from template…'); await instantiateTemplate(tpl, id, ldate, roleMap); }
     renderBoardPicker(); refreshCounts(); openProject(id);
@@ -1179,6 +1339,7 @@ async function boot(){
   document.getElementById('nav').addEventListener('click',e=>{ const it=e.target.closest('.nav-item'); if(!it||it.classList.contains('disabled')||!it.dataset.view) return; show(it.dataset.view); });
   document.querySelectorAll('[data-jump]').forEach(el=>el.addEventListener('click',()=>show(el.dataset.jump)));
   document.getElementById('proj-filter').addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b) return; currentFilter=b.dataset.f; document.querySelectorAll('#proj-filter button').forEach(x=>x.classList.toggle('on',x===b)); renderProjects(currentFilter); });
+  document.getElementById('tl-mode').addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b) return; tlMode=b.dataset.m; document.querySelectorAll('#tl-mode button').forEach(x=>x.classList.toggle('on',x===b)); renderTimeline(); });
   document.getElementById('mode-badge').textContent = LIVE ? 'Live' : 'Demo';
   document.getElementById('mode-badge').className = 'mode-badge '+(LIVE?'live':'demo');
   if(!LIVE) document.getElementById('demo-banner').style.display='flex';

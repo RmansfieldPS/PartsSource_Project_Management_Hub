@@ -98,6 +98,14 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   latest due), Templates manager view (admin nav) with step editor + starter
   import. 4 starters in seed-data.js (Email Series, Promo, ABM, Event).
   Templates are admin-managed, viewable by all. Migration: db/upgrade-templates.sql.
-- Nav stub remaining: Timeline ("soon").
-- Possible next (Tier 2/3): password-reset UI, email digest (needs Edge Function),
-  WordPress read-only dashboard, Timeline/Gantt.
+- **Timeline shipped (2026-07-31):** two modes on one screen (`tlMode`):
+  portfolio (campaign bars derived min→max of task dues + launchDate; progress
+  fill; status colors; ⚑ launch flag) and single-campaign (milestone circles on
+  due dates, SVG cubic dependency arrows via blocked_by_task, undated tasks
+  listed below). Drag-to-reschedule: pointer events on .tl-marker, snaps to
+  TL_PPD-sized days, gated by canEdit, persists due. Date math is string/ISO
+  (no TZ). `projects.launch_date` added (db/upgrade-timeline.sql) — set via
+  campaign modal or template flow; `HAS_LDATE` feature-detects the column so
+  the app works pre-migration. All nav stubs are now done.
+- Possible next (Tier 3): password-reset UI, email digest (needs Edge Function),
+  WordPress read-only dashboard.

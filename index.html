@@ -41,10 +41,9 @@
         <button class="nav-item" data-view="projects"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>Campaigns <span class="count" id="c-proj">0</span></button>
         <button class="nav-item" data-view="roadblocks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Roadblocks <span class="count" id="c-rb">0</span></button>
         <button class="nav-item" data-view="calendar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Calendar</button>
+        <button class="nav-item" data-view="timeline"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>Timeline</button>
         <button class="nav-item" data-view="team" id="nav-team" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>Team</button>
         <button class="nav-item" data-view="templates" id="nav-tpl" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Templates</button>
-        <div class="nav-label">Coming soon</div>
-        <button class="nav-item disabled"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>Timeline <span class="soon">soon</span></button>
       </nav>
       <div class="sidebar-foot" id="sidebar-foot"></div>
     </aside>
@@ -163,6 +162,26 @@
           <div class="page-sub" style="margin-top:10px">Tasks appear on their due date · click one to open it</div>
         </section>
 
+        <!-- TIMELINE -->
+        <section class="view" id="view-timeline">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+            <div class="seg" id="tl-mode"><button class="on" data-m="portfolio">All campaigns</button><button data-m="campaign">Single campaign</button></div>
+            <select class="proj-pick" id="tl-pick" style="display:none" onchange="tlProject=this.value;renderTimeline()"></select>
+            <div class="filterbar" id="tl-filt-portfolio">
+              <select class="fsel" id="tl-fo" onchange="FILT.tl.owner=this.value;renderTimeline()"></select>
+              <select class="fsel" id="tl-fm" onchange="FILT.tl.motion=this.value;renderTimeline()">
+                <option value="">All motions</option><option value="recruit">Recruit</option><option value="grow">Grow</option><option value="retain">Retain</option>
+              </select>
+            </div>
+            <div class="filterbar" id="tl-filt-campaign" style="display:none">
+              <select class="fsel" id="tl-fa" onchange="FILT.tl.a=this.value;renderTimeline()"></select>
+            </div>
+            <button class="btn sm" onclick="tlToday()">Today</button>
+            <span class="page-sub" style="margin-left:auto" id="tl-hint"></span>
+          </div>
+          <div class="card" style="overflow:hidden"><div class="tl-scroll" id="tl-scroll"><div id="tl-inner"></div></div></div>
+        </section>
+
         <!-- TEAM (admins only) -->
         <section class="view" id="view-team">
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
@@ -214,6 +233,7 @@
       <div class="mfield"><label>Pipeline</label><input id="cm-pipeline" placeholder="e.g. Stage 5" /></div>
       <div class="mfield"><label>Est. value</label><input id="cm-value" placeholder="e.g. $500K" /></div>
       <div class="mfield"><label>Launch</label><input id="cm-launch" placeholder="e.g. Early September" /></div>
+      <div class="mfield"><label>Launch date (timeline flag)</label><input id="cm-launchdate" type="date" /></div>
       <div class="mfield wide"><label>Audience</label><input id="cm-audience" placeholder="Who this targets, and how many" /></div>
       <div class="mfield wide"><label>Blocker (leave empty if none)</label><input id="cm-blocker" placeholder="What's holding this campaign up" /></div>
       <div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Cancel</button><button type="submit" class="btn primary" id="cm-save">Create campaign</button></div>

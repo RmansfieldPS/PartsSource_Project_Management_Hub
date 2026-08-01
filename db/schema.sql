@@ -34,6 +34,7 @@ create table if not exists projects (
   owner_id    text references members(id),
   blocker     text,
   approver_id text references members(id),  -- null = no approval required
+  archived    boolean default false,         -- hidden from lists; history kept
   sort        int default 0,
   created_at  timestamptz default now()
 );

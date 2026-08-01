@@ -119,5 +119,16 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   Resubmit for admin, mini history), chips on cards + dashboard, Excel meta row.
   Notifications both directions. `HAS_APPR` feature-detects pre-migration.
   Migration: db/upgrade-approvals.sql. Seed: MH is approver; top5 pending.
-- Possible next (Tier 3): password-reset UI, email digest (needs Edge Function),
-  WordPress read-only dashboard.
+- **Fundamentals shipped (2026-07-31):** task editing (due/priority inline in
+  drawer via `setTaskField`; title/description via `drawerEdit` mode + pencil);
+  delete task (assignee/admin, clears dependents' `bt`, removes storage files),
+  subtask, own comment (RLS loosened in db/upgrade-fundamentals.sql: tsk_del +
+  com_del now assignee/author or admin); campaign archive (`projects.archived`,
+  `HAS_ARCH` feature-detect, `visibleProjects()` filters every view/picker/
+  search/counts; Archived seg tab on Campaigns; admin-only) and campaign hard
+  delete (in edit modal, double-confirm, cascades + storage cleanup); undo —
+  `showToast(msg,{action,onAction})` on task completion. `rerender()` now
+  refreshes whichever view is active.
+- Possible next (Tier 3): @mentions + comment editing + recurring tasks;
+  password-reset UI; email digest (needs Edge Function); WordPress read-only
+  dashboard.

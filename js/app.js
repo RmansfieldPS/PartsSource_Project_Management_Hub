@@ -30,11 +30,14 @@ let editingTpl = null;
 let tlMode = 'portfolio', tlProject = null;
 let HAS_LDATE = true; // projects.launch_date column present (false until upgrade-timeline.sql runs)
 let HAS_APPR = true;  // approvals migration present (false until upgrade-approvals.sql runs)
+let HAS_ARCH = true;  // projects.archived column present (false until upgrade-fundamentals.sql runs)
+let drawerEdit = false; // task drawer title/description edit mode
 const TL_PPD = 16, TL_LABELW = 230, TL_ROWH = 38, TL_HEADH = 34;
 let calY = TODAY.getFullYear(), calM = TODAY.getMonth();
 
 /* ---------- Helpers ---------- */
 const byId = id => PROJECTS.find(p => p.id === id);
+const visibleProjects = () => PROJECTS.filter(p => !p.archived);
 function esc(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function fmtDue(iso){ if(!iso) return 'TBD'; const d=new Date(iso+'T00:00:00'); return MONTHS[d.getMonth()]+' '+d.getDate(); }
 function fmtWhen(ts){ if(!ts) return ''; const d=new Date(ts); return MONTHS[d.getMonth()]+' '+d.getDate(); }
@@ -74,7 +77,18 @@ function parseValue(v){
   return parseFloat(m[1]) * (m[2].toUpperCase()==='M' ? 1e6 : 1e3);
 }
 function isView(v){ return document.getElementById('view-'+v).classList.contains('active'); }
-function toast(msg,bad){ const el=document.getElementById('toast'); el.textContent=msg; el.className='toast show'+(bad?' bad':''); setTimeout(()=>el.className='toast',3200); }
+let toastTimer=null, toastFn=null;
+function toast(msg,bad){ showToast(msg,{bad:!!bad}); }
+function showToast(msg,opts){
+  opts=opts||{};
+  const el=document.getElementById('toast');
+  el.innerHTML = esc(msg) + (opts.action?` <button class="tundo" onclick="runToastAction()">${esc(opts.action)}</button>`:'');
+  toastFn = opts.onAction||null;
+  el.className='toast show'+(opts.bad?' bad':'');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>{ el.className='toast'; toastFn=null; }, opts.action?6000:3200);
+}
+function runToastAction(){ const f=toastFn; toastFn=null; document.getElementById('toast').className='toast'; if(f) f(); }
 
 /* ---------- Task detail hydration ---------- */
 function ensureDetail(p,t){
@@ -149,6 +163,7 @@ async function loadLive(){
     TEMPLATES = tr.error ? [] : (tr.data||[]).map(r=>({id:r.id, name:r.name, description:r.description||'', defaults:r.defaults||{}, steps:r.steps||[], by:r.created_by}));
   } catch(_) { TEMPLATES = []; }
   HAS_LDATE = (prj.data && prj.data.length) ? ('launch_date' in prj.data[0]) : true;
+  HAS_ARCH  = (prj.data && prj.data.length) ? ('archived' in prj.data[0]) : true;
   // approvals table may not exist until db/upgrade-approvals.sql has run — tolerate that
   let aprBy={};
   try {
@@ -159,7 +174,7 @@ async function loadLive(){
     id:p.id, name:p.name, desc:p.description, segment:p.segment, motion:p.motion, solution:p.solution,
     pipeline:p.pipeline, value:p.value, audience:p.audience, launch:p.launch, launchDate:p.launch_date||null, status:p.status,
     blocker:p.blocker, owner:p.owner_id, approverId:p.approver_id||null, _approvals:aprBy[p.id]||[],
-    tasks:tBy[p.id]||[], _files:pfBy[p.id]||[]
+    archived:!!p.archived, tasks:tBy[p.id]||[], _files:pfBy[p.id]||[]
   }));
 }
 
@@ -173,15 +188,16 @@ async function pInsert(table,row){ const {data,error}=await sb.from(table).inser
    RENDER — Dashboard
    =================================================================== */
 function renderDashboard(){
-  const active = PROJECTS.filter(p=>p.status==='active');
+  const vis = visibleProjects();
+  const active = vis.filter(p=>p.status==='active');
   document.getElementById('kpi-active').textContent = active.length;
-  document.getElementById('kpi-active-foot').textContent = `of ${PROJECTS.length} total campaigns`;
-  document.getElementById('kpi-rb').textContent = PROJECTS.flatMap(p=>p.tasks).filter(t=>t.s==='blocked').length;
-  document.getElementById('kpi-done').textContent = PROJECTS.filter(p=>p.status==='complete').length;
+  document.getElementById('kpi-active-foot').textContent = `of ${vis.length} total campaigns`;
+  document.getElementById('kpi-rb').textContent = vis.flatMap(p=>p.tasks).filter(t=>t.s==='blocked').length;
+  document.getElementById('kpi-done').textContent = vis.filter(p=>p.status==='complete').length;
   document.getElementById('kpi-pipeline').textContent = fmtMoney(active.reduce((s,p)=>s+parseValue(p.value),0));
 
   // open work by status (non-complete campaigns)
-  const openTasks = PROJECTS.filter(p=>p.status!=='complete').flatMap(p=>p.tasks);
+  const openTasks = vis.filter(p=>p.status!=='complete').flatMap(p=>p.tasks);
   const sbCounts = {}; ORDER.forEach(s=>sbCounts[s]=0);
   openTasks.forEach(t=>{ if(sbCounts[t.s]!=null) sbCounts[t.s]++; });
   const sbMax = Math.max(...Object.values(sbCounts),1);
@@ -190,13 +206,13 @@ function renderDashboard(){
     `<div class="sb-row"><span class="sb-name"><span class="dot" style="background:${STATUS[s].dot}"></span>${STATUS[s].label}</span><div class="sb-track"><span style="width:${Math.round(sbCounts[s]/sbMax*100)}%;background:${STATUS[s].dot}"></span></div><span class="num" style="width:24px;text-align:right;font-weight:700;font-size:12.5px">${sbCounts[s]}</span></div>`
   ).join('');
 
-  document.getElementById('dash-active').innerHTML = PROJECTS.filter(p=>p.status==='active').map(p=>{
+  document.getElementById('dash-active').innerHTML = active.map(p=>{
     const pr=progress(p), st=STATUS_PILL[projStatus(p)];
     return `<tr class="clickable" onclick="openProject('${p.id}')"><td class="proj-name">${esc(p.name)}</td><td>${av(ownerOf(p))}</td><td><span class="motion ${p.motion}">${esc(p.motion)}</span></td><td><div style="display:flex;align-items:center;gap:9px"><div class="bar"><span style="width:${pr.pct}%"></span></div><span class="num" style="font-size:12px;color:var(--ink-3)">${pr.pct}%</span></div></td><td class="num">${esc((p.launch||'').split('·')[0].trim())}</td><td><div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start"><span class="pill ${st[0]}">${st[1]}</span>${apprChip(p,true)}</div></td></tr>`;
   }).join('') || `<tr><td colspan="6" style="color:var(--ink-3)">No active campaigns.</td></tr>`;
 
   const counts={}; Object.keys(TEAM).forEach(k=>counts[k]=0);
-  PROJECTS.forEach(p=>p.tasks.forEach(t=>{ if(t.s!=='done' && counts[t.a]!=null) counts[t.a]++; }));
+  vis.forEach(p=>p.tasks.forEach(t=>{ if(t.s!=='done' && counts[t.a]!=null) counts[t.a]++; }));
   const max=Math.max(...Object.values(counts),1);
   document.getElementById('workload').innerHTML = Object.keys(TEAM).map(k=>{
     const c=counts[k]||0, w=Math.round(c/max*100), col=c>=7?'var(--crit)':c>=5?'var(--warn)':'var(--accent)';
@@ -204,10 +220,10 @@ function renderDashboard(){
   }).join('');
 
   const soon=new Date(TODAY); soon.setDate(soon.getDate()-3);
-  const up = PROJECTS.flatMap(p=>p.tasks.filter(t=>t.due&&t.s!=='done').map(t=>({t,p}))).filter(x=>new Date(x.t.due+'T00:00:00')>=soon).sort((a,b)=>a.t.due<b.t.due?-1:1).slice(0,5);
+  const up = vis.flatMap(p=>p.tasks.filter(t=>t.due&&t.s!=='done').map(t=>({t,p}))).filter(x=>new Date(x.t.due+'T00:00:00')>=soon).sort((a,b)=>a.t.due<b.t.due?-1:1).slice(0,5);
   document.getElementById('deadlines').innerHTML = up.map(({t,p})=>{ const d=new Date(t.due+'T00:00:00'), over=d<TODAY; return `<div class="dl-row"><div class="dl-date"><div class="d num" style="${over?'color:var(--crit)':''}">${String(d.getDate()).padStart(2,'0')}</div><div class="m">${MONTHS[d.getMonth()]}</div></div><div class="dl-main"><div class="t">${esc(t.t)}</div><div class="s">${esc(p.name)} · ${esc(teamName(t.a))}</div></div><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></div>`; }).join('') || `<div style="padding:14px 18px;color:var(--ink-3);font-size:12.5px">Nothing due soon.</div>`;
 
-  document.getElementById('completed-list').innerHTML = PROJECTS.filter(p=>p.status==='complete').map(p=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--good)" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg><div style="flex:1"><div style="font-weight:600">${esc(p.name)}</div><div style="font-size:11.5px;color:var(--ink-3)">${esc(teamName(ownerOf(p)))} · ${esc(p.value)}</div></div></div>`).join('') || `<div style="color:var(--ink-3);font-size:12.5px">None yet.</div>`;
+  document.getElementById('completed-list').innerHTML = vis.filter(p=>p.status==='complete').map(p=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--good)" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg><div style="flex:1"><div style="font-weight:600">${esc(p.name)}</div><div style="font-size:11.5px;color:var(--ink-3)">${esc(teamName(ownerOf(p)))} · ${esc(p.value)}</div></div></div>`).join('') || `<div style="color:var(--ink-3);font-size:12.5px">None yet.</div>`;
 }
 
 /* ===================================================================
@@ -221,7 +237,8 @@ function renderProjects(filter){
   segSel.innerHTML = `<option value="">All segments</option>`+segs.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
   segSel.value = segs.includes(FILT.proj.segment) ? FILT.proj.segment : (FILT.proj.segment='', '');
   ['proj-fm','proj-fo','proj-fs'].forEach((id,ix)=>document.getElementById(id).classList.toggle('on',!!Object.values(FILT.proj)[ix]));
-  const list = PROJECTS.filter(p=> filter==='all'?true : filter==='active'?p.status==='active' : filter==='planning'?(p.status==='planning'||p.status==='review') : p.status==='complete')
+  const list = (filter==='archived' ? PROJECTS.filter(p=>p.archived)
+      : visibleProjects().filter(p=> filter==='all'?true : filter==='active'?p.status==='active' : filter==='planning'?(p.status==='planning'||p.status==='review') : p.status==='complete'))
     .filter(p=>!FILT.proj.motion || p.motion===FILT.proj.motion)
     .filter(p=>!FILT.proj.owner || ownerOf(p)===FILT.proj.owner)
     .filter(p=>!FILT.proj.segment || p.segment===FILT.proj.segment);
@@ -258,7 +275,7 @@ function renderProjectDetail(){
 
   document.getElementById('project-detail').innerHTML = `
     <div class="pd-head">
-      <div style="flex:1"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="pd-title">${esc(p.name)}</span><span class="pill ${st[0]}">${st[1]}</span>${isAdminMe()?`<button class="btn sm" onclick="openCampaignModal('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4z"/></svg>Edit</button>`:''}<button class="btn sm" onclick="exportCampaign('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export</button>${isAdminMe()?`<button class="btn sm" onclick="saveAsTemplate('${p.id}')" title="Turn this campaign's task list into a reusable template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Save as template</button>`:''}</div><div class="pd-desc">${esc(p.desc)}</div></div>
+      <div style="flex:1"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="pd-title">${esc(p.name)}</span><span class="pill ${st[0]}">${st[1]}</span>${isAdminMe()?`<button class="btn sm" onclick="openCampaignModal('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4z"/></svg>Edit</button>`:''}<button class="btn sm" onclick="exportCampaign('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export</button>${isAdminMe()?`<button class="btn sm" onclick="saveAsTemplate('${p.id}')" title="Turn this campaign's task list into a reusable template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Save as template</button><button class="btn sm" onclick="archiveCampaign('${p.id}',${p.archived?'false':'true'})" title="${p.archived?'Restore to active lists':'Hide from lists — nothing is deleted'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>${p.archived?'Unarchive':'Archive'}</button>`:''}</div><div class="pd-desc">${esc(p.desc)}</div></div>
       <div class="pd-owner"><div class="lbl">Owner</div><span class="chip-person" style="font-size:13.5px">${av(owner)}${esc(teamName(owner))}</span></div>
     </div>
     <div class="metastrip">
@@ -267,6 +284,7 @@ function renderProjectDetail(){
       <div class="meta-item"><div class="ml">Est. Value</div><div class="mv" style="color:var(--good)">${esc(p.value)||'—'}</div></div>
       <div class="meta-item"><div class="ml">Launch</div><div class="mv">${esc(p.launch)||'—'}</div></div>
     </div>
+    ${p.archived?`<div class="banner info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg><span><b>Archived.</b> This campaign is hidden from lists and reports — nothing was deleted. Find it under Campaigns → Archived.</span></div>`:''}
     ${p.blocker?`<div class="pd-blocker"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span><b>Blocker:</b> ${esc(p.blocker)}</span></div>`:''}
     ${(function(){
       const st=approvalState(p); if(!st) return '';
@@ -332,8 +350,64 @@ function setStatus(id,i,v){
   if(LIVE) pUpdate('tasks',t.id,fields);
   if(v==='done') autoUnblock(p,t);
   rerender();
+  if(v==='done' && was!=='done'){
+    showToast(`Completed "${t.t}"`, { action:'Undo', onAction:()=>{
+      const p2=byId(id); if(!p2) return;
+      const idx=p2.tasks.indexOf(t); if(idx>-1) setStatus(id, idx, was);
+    }});
+  }
 }
 function cycleDone(id,i){ const t=byId(id).tasks[i]; setStatus(id,i, t.s==='done'?'todo':'done'); }
+function setTaskField(pid,i,field,val){
+  const t=byId(pid).tasks[i];
+  if(!canEdit(t)){ denyEdit(); rerender(); return; }
+  if(field==='due'){ t.due=val||null; if(LIVE) pUpdate('tasks',t.id,{due:t.due}); }
+  if(field==='pr'){ t.pr=val; if(LIVE) pUpdate('tasks',t.id,{priority:val}); }
+  rerender();
+}
+async function deleteTask(pid,i){
+  const p=byId(pid), t=p.tasks[i];
+  if(!(isAdminMe()||t.a===ME)){ toast('Only the assignee or an admin can delete this task', true); return; }
+  if(!confirm(`Delete "${t.t}"? Its subtasks, comments and files go with it.`)) return;
+  if(LIVE){
+    const paths=(t._links||[]).filter(l=>l.path).map(l=>l.path);
+    const {error}=await sb.from('tasks').delete().eq('id',t.id);
+    if(error){ toast('Delete failed: '+error.message, true); return; }
+    if(paths.length){ try{ sb.storage.from('pmpm-files').remove(paths); }catch(_){} }
+  }
+  p.tasks.forEach(x=>{ if(x.bt===t.id){ x.bt=null; if(x.s==='blocked'){ x.s='todo'; } if(LIVE) pUpdate('tasks',x.id,{blocked_by_task:null,status:x.s}); }});
+  p.tasks.splice(i,1);
+  closeDrawer(); rerender();
+  toast('Task deleted');
+}
+async function delSubtask(pid,i,si){
+  const t=byId(pid).tasks[i];
+  if(!canEdit(t)){ denyEdit(); return; }
+  const s=t._sub[si];
+  if(LIVE && s.id){ const {error}=await sb.from('subtasks').delete().eq('id',s.id); if(error){ toast('Delete failed: '+error.message, true); return; } }
+  t._sub.splice(si,1);
+  renderDrawer(pid,i);
+}
+async function delComment(pid,i,ci){
+  const t=byId(pid).tasks[i], c=t._comments[ci];
+  if(!(c.a===ME||isAdminMe())){ toast('You can only delete your own comments', true); return; }
+  if(LIVE && c.id){ const {error}=await sb.from('comments').delete().eq('id',c.id); if(error){ toast('Delete failed: '+error.message, true); return; } }
+  t._comments.splice(ci,1);
+  renderDrawer(pid,i);
+}
+function toggleDrawerEdit(on){ drawerEdit=on; if(currentTask) renderDrawer(currentTask.pid,currentTask.i); }
+async function saveDrawerEdit(pid,i){
+  const t=byId(pid).tasks[i];
+  if(!canEdit(t)){ denyEdit(); return; }
+  const title=document.getElementById('ed-title').value.trim();
+  const desc=document.getElementById('ed-desc').value.trim();
+  if(!title){ toast('The task needs a title', true); return; }
+  t.t=title; t._desc=desc;
+  if(LIVE) pUpdate('tasks',t.id,{title, description:desc});
+  drawerEdit=false;
+  rerender();
+  toast('Task updated');
+}
 function autoUnblock(p,doneTask){
   p.tasks.forEach(x=>{
     if(x.bt===doneTask.id && x.s==='blocked'){
@@ -361,7 +435,17 @@ function setBlockedBy(id,i,val){
   }
   rerender();
 }
-function rerender(){ if(currentProject && isView('project')) renderProjectDetail(); if(currentTask) renderDrawer(currentTask.pid,currentTask.i); refreshCounts(); }
+function rerender(){
+  if(currentProject && isView('project')) renderProjectDetail();
+  if(isView('dashboard')) renderDashboard();
+  if(isView('mytasks')) renderMyTasks();
+  if(isView('board')) renderBoard();
+  if(isView('projects')) renderProjects(currentFilter);
+  if(isView('calendar')) renderCalendar();
+  if(isView('timeline')) renderTimeline();
+  if(currentTask) renderDrawer(currentTask.pid,currentTask.i);
+  refreshCounts();
+}
 
 /* ---------- Assignee popover ---------- */
 const amenu = document.getElementById('amenu');
@@ -405,7 +489,7 @@ function toggleBell(e){
   if(panel.classList.contains('open')){ panel.classList.remove('open'); return; }
   const mine=myNotifs();
   // computed due-today/overdue for ME
-  const dueSoon = PROJECTS.flatMap(p=>p.tasks.map((t,i)=>({t,p,i})))
+  const dueSoon = visibleProjects().flatMap(p=>p.tasks.map((t,i)=>({t,p,i})))
     .filter(x=>x.t.a===ME && x.t.s!=='done' && x.t.due && new Date(x.t.due+'T00:00:00')<=TODAY);
   panel.innerHTML =
     (dueSoon.length?`<div class="bp-head">Needs attention today</div>`+dueSoon.map(({t,p,i})=>{
@@ -436,7 +520,7 @@ document.addEventListener('click',e=>{ if(!amenu.contains(e.target)&&!e.target.c
 /* ===================================================================
    RENDER — Task detail drawer
    =================================================================== */
-function openTask(id,i){ const p=byId(id),t=p.tasks[i]; ensureDetail(p,t); currentTask={pid:id,i,taskId:t.id}; renderDrawer(id,i); document.getElementById('drawer').classList.add('open'); document.getElementById('drawer-ov').classList.add('open'); }
+function openTask(id,i){ const p=byId(id),t=p.tasks[i]; ensureDetail(p,t); drawerEdit=false; currentTask={pid:id,i,taskId:t.id}; renderDrawer(id,i); document.getElementById('drawer').classList.add('open'); document.getElementById('drawer-ov').classList.add('open'); }
 function closeDrawer(){ currentTask=null; document.getElementById('drawer').classList.remove('open'); document.getElementById('drawer-ov').classList.remove('open'); }
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ closeDrawer(); closeModal(); closeBell(); document.getElementById('search-results').classList.remove('open'); } });
 function renderDrawer(id,i){
@@ -447,15 +531,16 @@ function renderDrawer(id,i){
   const over=t.due&&new Date(t.due+'T00:00:00')<TODAY&&t.s!=='done';
   document.getElementById('drawer').innerHTML = `
     <div class="drawer-head">
-      <div style="flex:1"><button class="d-proj" onclick="closeDrawer();openProject('${p.id}')">${esc(p.name)} ↗</button><div class="d-title">${esc(t.t)}</div></div>
+      <div style="flex:1;min-width:0"><button class="d-proj" onclick="closeDrawer();openProject('${p.id}')">${esc(p.name)} ↗</button>${drawerEdit?`<input id="ed-title" value="${esc(t.t)}" />`:`<div class="d-title">${esc(t.t)}</div>`}</div>
+      ${canEdit(t)&&!drawerEdit?`<button class="icon-btn" onclick="toggleDrawerEdit(true)" title="Edit title & description"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4z"/></svg></button>`:''}
       <button class="icon-btn" onclick="closeDrawer()" title="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="drawer-body">
       <div class="d-fields">
         <span class="fl">Assignee</span><span>${canEdit(t)?`<button class="assignee" onclick="openAssign(event,'${p.id}',${i})">${av(t.a)}${esc(teamName(t.a))}<span class="car">▾</span></button>`:`<span class="assignee" style="cursor:default">${av(t.a)}${esc(teamName(t.a))}</span>`}</span>
         <span class="fl">Status</span><span><select class="status-sel" ${canEdit(t)?'':'disabled'} onchange="setStatus('${p.id}',${i},this.value)">${ORDER.map(s=>`<option value="${s}" ${t.s===s?'selected':''}>${STATUS[s].label}</option>`).join('')}</select></span>
-        <span class="fl">Due date</span><span class="num t-due ${over?'over':''}" style="font-weight:600">${over?'Overdue · ':''}${fmtDue(t.due)}</span>
-        <span class="fl">Priority</span><span><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></span>
+        <span class="fl">Due date</span><span>${canEdit(t)?`<input type="date" class="status-sel" value="${t.due||''}" onchange="setTaskField('${p.id}',${i},'due',this.value)" />${over?` <span class="t-due over" style="font-size:11px;font-weight:700">Overdue</span>`:''}`:`<span class="num t-due ${over?'over':''}" style="font-weight:600">${over?'Overdue · ':''}${fmtDue(t.due)}</span>`}</span>
+        <span class="fl">Priority</span><span>${canEdit(t)?`<select class="status-sel" onchange="setTaskField('${p.id}',${i},'pr',this.value)"><option value="high" ${t.pr==='high'?'selected':''}>High</option><option value="med" ${t.pr==='med'?'selected':''}>Medium</option><option value="low" ${t.pr==='low'?'selected':''}>Low</option></select>`:`<span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span>`}</span>
         <span class="fl">Blocked by</span><span><select class="status-sel" style="max-width:100%" ${canEdit(t)?'':'disabled'} onchange="setBlockedBy('${p.id}',${i},this.value)">
           <option value="">— nothing —</option>
           ${p.tasks.filter(x=>x.id!==t.id && x.s!=='done').map(x=>`<option value="${x.id}" ${t.bt===x.id?'selected':''}>${esc(x.t)}</option>`).join('')}
@@ -464,16 +549,19 @@ function renderDrawer(id,i){
       ${t.bt?(function(){ const u=upstreamOf(p,t); return u?`<div class="d-blocker2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/></svg><span>Waiting on: <b>${esc(u.t)}</b> (${STATUS[u.s].label}, ${esc(teamName(u.a))}). Unblocks automatically when it's completed.</span></div>`:''; })():t.blockedBy?`<div class="d-blocker2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/></svg><span>Waiting on: ${esc(t.blockedBy)} (external input)</span></div>`:''}
       ${t.blocks?`<div class="d-blocker2" style="background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 30%,transparent);color:var(--warn)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg><span>This task blocks ${esc(t.blocks)}.</span></div>`:''}
       <div class="d-sec">Description</div>
-      <div class="d-desc">${esc(t._desc)}</div>
+      ${drawerEdit?`<textarea id="ed-desc">${esc(t._desc||'')}</textarea>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px"><button class="btn sm" onclick="toggleDrawerEdit(false)">Cancel</button><button class="btn primary sm" onclick="saveDrawerEdit('${p.id}',${i})">Save changes</button></div>`
+      :`<div class="d-desc">${esc(t._desc)}</div>`}
       <div class="d-sec">Subtasks <span class="cnt">${subDone}/${t._sub.length}</span><div class="prog-mini" style="margin-left:auto"><span style="width:${subPct}%"></span></div></div>
-      ${t._sub.map((s,si)=>`<div class="subrow ${s.done?'done':''}"><button class="check" style="${s.done?'background:var(--good);border-color:var(--good)':''}" onclick="toggleSub('${p.id}',${i},${si})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="opacity:${s.done?1:0}"><path d="M20 6L9 17l-5-5"/></svg></button><span class="sub-t">${esc(s.t)}</span></div>`).join('')}
+      ${t._sub.map((s,si)=>`<div class="subrow ${s.done?'done':''}"><button class="check" style="${s.done?'background:var(--good);border-color:var(--good)':''}" onclick="toggleSub('${p.id}',${i},${si})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="opacity:${s.done?1:0}"><path d="M20 6L9 17l-5-5"/></svg></button><span class="sub-t" style="flex:1;min-width:0">${esc(s.t)}</span>${canEdit(t)&&(!LIVE||s.id)?`<button class="mini-del" title="Delete subtask" onclick="delSubtask('${p.id}',${i},${si})">✕</button>`:''}</div>`).join('')}
       ${canEdit(t)?`<form class="subadd" onsubmit="addSub(event,'${p.id}',${i})"><input id="newsub" placeholder="Add a subtask…" /><button class="btn sm" type="submit">Add</button></form>`:''}
       <div class="d-sec">Attachments</div>
       ${t._links.length? t._links.map((l,ai)=>`<div class="att" style="cursor:pointer" onclick="openAtt('${p.id}',${i},${ai})"><span class="ai"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span style="flex:1;min-width:0"><div class="al">${esc(l.label)}</div><div class="as">${esc(l.sub||'')}</div></span>${(canEdit(t)||l.by===ME)?`<button class="icon-btn" style="width:28px;height:28px" title="Remove" onclick="event.stopPropagation();delAtt('${p.id}',${i},${ai})"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`:''}</div>`).join('') : '<div class="att-empty">No files yet.</div>'}
       ${canEdit(t)?`<button class="btn sm" style="margin-top:8px" onclick="pickFile('${p.id}',{i:${i}})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>Attach file</button>`:''}
       <div class="d-sec">Activity</div>
-      ${t._comments.map(c=>`<div class="activity">${av(c.a)}<div class="aline"><span class="an">${esc(teamName(c.a))}</span> ${esc(c.x)}<div class="aw">${esc(c.w)}</div></div></div>`).join('') || '<div class="att-empty">No activity yet.</div>'}
+      ${t._comments.map((c,ci)=>`<div class="activity">${av(c.a)}<div class="aline" style="min-width:0"><span class="an">${esc(teamName(c.a))}</span> ${esc(c.x)}<div class="aw">${esc(c.w)}</div></div>${(c.a===ME||isAdminMe())&&(!LIVE||c.id)?`<button class="mini-del" title="Delete comment" onclick="delComment('${p.id}',${i},${ci})">✕</button>`:''}</div>`).join('') || '<div class="att-empty">No activity yet.</div>'}
       <form class="commentbox" onsubmit="addComment(event,'${p.id}',${i})">${av(ME)}<textarea id="newcomment" placeholder="Write a comment…"></textarea><button class="btn primary sm" type="submit">Post</button></form>
+      ${(isAdminMe()||t.a===ME)?`<button class="del-task" onclick="deleteTask('${p.id}',${i})"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>Delete this task</button>`:''}
     </div>`;
 }
 function toggleSub(id,i,si){ const t=byId(id).tasks[i]; if(!canEdit(t)){ denyEdit(); return; } const s=t._sub[si]; s.done=!s.done; renderDrawer(id,i); if(LIVE&&s.id) pUpdate('subtasks',s.id,{done:s.done}); }
@@ -807,7 +895,7 @@ async function exportCampaign(id){
    RENDER — My Tasks
    =================================================================== */
 function renderMyTasks(){
-  const mine = PROJECTS.flatMap(p=>p.tasks.map((t,i)=>({t,p,i}))).filter(x=>x.t.a===ME && x.t.s!=='done');
+  const mine = visibleProjects().flatMap(p=>p.tasks.map((t,i)=>({t,p,i}))).filter(x=>x.t.a===ME && x.t.s!=='done');
   const buckets={Overdue:[],'Due Today':[],'This Week':[],Later:[]};
   mine.forEach(x=>{ const d=x.t.due?new Date(x.t.due+'T00:00:00'):null; if(!d){buckets.Later.push(x);return;} const diff=Math.round((d-TODAY)/86400000); if(diff<0)buckets.Overdue.push(x); else if(diff===0)buckets['Due Today'].push(x); else if(diff<=7)buckets['This Week'].push(x); else buckets.Later.push(x); });
   const over=buckets.Overdue.length, today=buckets['Due Today'].length, blocked=mine.filter(x=>x.t.s==='blocked').length;
@@ -825,7 +913,7 @@ function renderMyTasks(){
 /* ===================================================================
    RENDER — Board
    =================================================================== */
-function renderBoardPicker(){ document.getElementById('board-pick').innerHTML = PROJECTS.filter(p=>p.status!=='complete').map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join(''); }
+function renderBoardPicker(){ document.getElementById('board-pick').innerHTML = visibleProjects().filter(p=>p.status!=='complete').map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join(''); }
 function renderBoard(id){
   const picker=document.getElementById('board-pick');
   id=id||picker.value||(PROJECTS[0]&&PROJECTS[0].id);
@@ -871,7 +959,7 @@ function cardClick(pid,idx){ if(suppressClick) return; openTask(pid,idx); }
    RENDER — Roadblocks
    =================================================================== */
 function renderRoadblocks(){
-  const blocked = PROJECTS.flatMap(p=>p.tasks.map((t,i)=>({t,p,i})).filter(x=>x.t.s==='blocked'));
+  const blocked = visibleProjects().flatMap(p=>p.tasks.map((t,i)=>({t,p,i})).filter(x=>x.t.s==='blocked'));
   document.getElementById('rb-banner-text').innerHTML = blocked.length ? `<b>${blocked.length} task${blocked.length>1?'s are':' is'} blocked.</b> Each is waiting on an upstream task or input before work can continue.` : `No roadblocks right now — nothing is blocked.`;
   document.getElementById('roadblocks-body').innerHTML = blocked.map(({t,p,i})=>{
     const u=upstreamOf(p,t);
@@ -897,7 +985,7 @@ function calToday(){ calY=TODAY.getFullYear(); calM=TODAY.getMonth(); renderCale
 function renderCalendar(){
   // campaign filter options reflect current data; preserve selection
   const fp=document.getElementById('cal-fp');
-  fp.innerHTML = `<option value="">All campaigns</option>`+PROJECTS.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  fp.innerHTML = `<option value="">All campaigns</option>`+visibleProjects().map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
   fp.value = byId(FILT.cal.proj) ? FILT.cal.proj : (FILT.cal.proj='', '');
   document.getElementById('cal-fa').classList.toggle('on',!!FILT.cal.a);
   fp.classList.toggle('on',!!FILT.cal.proj);
@@ -905,7 +993,7 @@ function renderCalendar(){
 
   // index tasks by due date string (respecting filters)
   const byDue={};
-  PROJECTS.forEach(p=>p.tasks.forEach((t,i)=>{
+  visibleProjects().forEach(p=>p.tasks.forEach((t,i)=>{
     if(!t.due) return;
     if(FILT.cal.a && t.a!==FILT.cal.a) return;
     if(FILT.cal.proj && p.id!==FILT.cal.proj) return;
@@ -969,8 +1057,10 @@ function renderTimeline(){
   document.getElementById('tl-filt-portfolio').style.display = single?'none':'';
   document.getElementById('tl-filt-campaign').style.display = single?'':'none';
   const pick=document.getElementById('tl-pick');
-  pick.innerHTML = PROJECTS.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
-  if(!byId(tlProject)) tlProject=(PROJECTS.find(p=>p.status==='active')||PROJECTS[0]||{}).id||null;
+  const vis=visibleProjects();
+  pick.innerHTML = vis.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  const cur=byId(tlProject);
+  if(!cur || cur.archived) tlProject=(vis.find(p=>p.status==='active')||vis[0]||{}).id||null;
   if(tlProject) pick.value=tlProject;
   document.getElementById('tl-fo').classList.toggle('on',!!FILT.tl.owner);
   document.getElementById('tl-fm').classList.toggle('on',!!FILT.tl.motion);
@@ -981,7 +1071,7 @@ function renderTimeline(){
   tlToday();
 }
 function renderTlPortfolio(inner){
-  const list=PROJECTS
+  const list=visibleProjects()
     .filter(p=>!FILT.tl.owner || ownerOf(p)===FILT.tl.owner)
     .filter(p=>!FILT.tl.motion || p.motion===FILT.tl.motion);
   const rows=[], undated=[], allDates=[];
@@ -1100,11 +1190,11 @@ function runSearch(q){
   q=(q||'').trim().toLowerCase();
   if(q.length<2){ box.classList.remove('open'); return; }
   const hits=[];
-  PROJECTS.forEach(p=>{
+  visibleProjects().forEach(p=>{
     if([p.name,p.desc,p.segment,p.solution].some(f=>f&&f.toLowerCase().includes(q)))
       hits.push({kind:'camp', label:p.name, sub:`${p.segment||''} · ${STATUS_PILL[projStatus(p)][1]}`, click:`openProject('${p.id}')`});
   });
-  PROJECTS.forEach(p=>p.tasks.forEach((t,i)=>{
+  visibleProjects().forEach(p=>p.tasks.forEach((t,i)=>{
     if(t.t.toLowerCase().includes(q))
       hits.push({kind:'task', label:t.t, sub:`${p.name} · ${teamName(t.a)}`, click:`openTask('${p.id}',${i})`});
   }));
@@ -1141,9 +1231,10 @@ function show(view){
   window.scrollTo(0,0);
 }
 function refreshCounts(){
-  document.getElementById('c-mine').textContent = PROJECTS.flatMap(p=>p.tasks).filter(t=>t.a===ME&&t.s!=='done').length;
-  document.getElementById('c-proj').textContent = PROJECTS.filter(p=>p.status!=='complete').length;
-  document.getElementById('c-rb').textContent = PROJECTS.flatMap(p=>p.tasks).filter(t=>t.s==='blocked').length;
+  const vis=visibleProjects();
+  document.getElementById('c-mine').textContent = vis.flatMap(p=>p.tasks).filter(t=>t.a===ME&&t.s!=='done').length;
+  document.getElementById('c-proj').textContent = vis.filter(p=>p.status!=='complete').length;
+  document.getElementById('c-rb').textContent = vis.flatMap(p=>p.tasks).filter(t=>t.s==='blocked').length;
 }
 function rerenderCurrent(){
   renderBoardPicker(); refreshCounts(); renderBell();
@@ -1164,6 +1255,7 @@ function openCampaignModal(id){
   document.getElementById('cm-approver').innerHTML = `<option value="">None — no approval needed</option>`+eligible.map(k=>`<option value="${k}">${esc(TEAM[k].name)} (${esc(TEAM[k].role||'')})</option>`).join('');
   document.getElementById('cm-approver').value = p ? (p.approverId||'') : '';
   document.getElementById('cm-approver').closest('.mfield').style.display = HAS_APPR ? '' : 'none';
+  document.getElementById('cm-delete').style.display = (p && isAdminMe()) ? '' : 'none';
   document.getElementById('cm-name').value     = p ? p.name : '';
   document.getElementById('cm-desc').value     = p ? (p.desc||'') : '';
   document.getElementById('cm-owner').value    = p ? (ownerOf(p)||ME) : ME;
@@ -1214,6 +1306,42 @@ function closeModal(){
   document.getElementById('user-modal').classList.remove('open');
   document.getElementById('tpl-modal').classList.remove('open');
   document.getElementById('modal-ov').classList.remove('open');
+}
+
+/* ---------- Archive / delete campaign (admins) ---------- */
+async function archiveCampaign(pid, flag){
+  if(!isAdminMe()){ toast('Admins only', true); return; }
+  if(!HAS_ARCH){ toast('Run db/upgrade-fundamentals.sql first to enable archiving', true); return; }
+  const p=byId(pid);
+  p.archived=!!flag;
+  if(LIVE) await pUpdate('projects', pid, {archived:!!flag});
+  renderBoardPicker(); refreshCounts();
+  if(flag){
+    currentFilter='active';
+    document.querySelectorAll('#proj-filter button').forEach(x=>x.classList.toggle('on',x.dataset.f==='active'));
+    show('projects');
+    showToast(`"${p.name}" archived`, {action:'Undo', onAction:()=>archiveCampaign(pid,false)});
+  } else {
+    if(isView('project') && currentProject===pid) renderProjectDetail(); else show(currentView);
+    toast(`"${p.name}" restored`);
+  }
+}
+async function deleteCampaign(){
+  if(!isAdminMe() || !editingProject) return;
+  const p=byId(editingProject);
+  if(!confirm(`Delete "${p.name}" and ALL of its ${p.tasks.length} tasks, files and history?`)) return;
+  if(!confirm('This cannot be undone. Really delete the whole campaign?')) return;
+  if(LIVE){
+    const paths=[...(p._files||[]), ...p.tasks.flatMap(t=>t._links||[])].filter(l=>l.path).map(l=>l.path);
+    const {error}=await sb.from('projects').delete().eq('id',p.id);
+    if(error){ toast('Delete failed: '+error.message, true); return; }
+    if(paths.length){ try{ sb.storage.from('pmpm-files').remove(paths); }catch(_){} }
+  }
+  PROJECTS.splice(PROJECTS.indexOf(p),1);
+  if(currentProject===p.id) currentProject=null;
+  closeModal(); closeDrawer();
+  renderBoardPicker(); refreshCounts(); show('projects');
+  toast('Campaign deleted');
 }
 
 /* ---------- Team management (admins) ---------- */

@@ -126,7 +126,7 @@
         <!-- CAMPAIGNS -->
         <section class="view" id="view-projects">
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-            <div class="seg" id="proj-filter"><button class="on" data-f="active">Active</button><button data-f="planning">In Planning</button><button data-f="complete">Completed</button><button data-f="all">All</button></div>
+            <div class="seg" id="proj-filter"><button class="on" data-f="active">Active</button><button data-f="planning">In Planning</button><button data-f="complete">Completed</button><button data-f="all">All</button><button data-f="archived">Archived</button></div>
             <div class="filterbar">
               <select class="fsel" id="proj-fm" onchange="FILT.proj.motion=this.value;renderProjects(currentFilter)">
                 <option value="">All motions</option><option value="recruit">Recruit</option><option value="grow">Grow</option><option value="retain">Retain</option>
@@ -237,7 +237,7 @@
       <div class="mfield"><label>Launch date (timeline flag)</label><input id="cm-launchdate" type="date" /></div>
       <div class="mfield wide"><label>Audience</label><input id="cm-audience" placeholder="Who this targets, and how many" /></div>
       <div class="mfield wide"><label>Blocker (leave empty if none)</label><input id="cm-blocker" placeholder="What's holding this campaign up" /></div>
-      <div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Cancel</button><button type="submit" class="btn primary" id="cm-save">Create campaign</button></div>
+      <div class="modal-foot"><button type="button" class="btn sm" id="cm-delete" style="margin-right:auto;color:var(--crit);border-color:color-mix(in srgb, var(--crit) 50%, var(--line-strong))" onclick="deleteCampaign()">Delete campaign</button><button type="button" class="btn" onclick="closeModal()">Cancel</button><button type="submit" class="btn primary" id="cm-save">Create campaign</button></div>
     </form>
   </div>
 

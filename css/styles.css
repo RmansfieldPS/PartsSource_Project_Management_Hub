@@ -428,6 +428,14 @@ select.proj-pick { border: 1px solid var(--line-strong); background: var(--surfa
 .tl-svg path { fill: none; stroke: var(--ink-3); stroke-width: 1.5; opacity: .55; }
 .tl-todayline { position: absolute; width: 2px; background: var(--crit); opacity: .5; z-index: 4; pointer-events: none; }
 
+/* Reports */
+.rep-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 1080px) { .rep-grid { grid-template-columns: 1fr; } }
+.rep svg text { font-family: var(--font); }
+
+/* Mentions */
+.mention { color: var(--accent-ink); background: var(--accent-soft); font-weight: 700; border-radius: 4px; padding: 0 3px; }
+
 /* Toast */
 .toast { position: fixed; bottom: 22px; left: 50%; transform: translate(-50%, 20px); background: var(--ink); color: var(--surface); padding: 11px 18px; border-radius: 10px; font-size: 13px; font-weight: 600; box-shadow: 0 10px 30px rgba(0,0,0,.25); opacity: 0; pointer-events: none; transition: .25s; z-index: 300; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }

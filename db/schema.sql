@@ -61,6 +61,7 @@ create table if not exists tasks (
   blocks          text,
   description     text,
   completed_at    timestamptz,
+  recur           text check (recur is null or recur in ('weekly','biweekly','monthly')),
   position        int default 0,
   created_at      timestamptz default now()
 );
@@ -78,7 +79,8 @@ create table if not exists comments (
   task_id    uuid references tasks(id) on delete cascade,
   author_id  text references members(id),
   body       text not null,
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  updated_at timestamptz               -- set when edited
 );
 
 create table if not exists attachments (

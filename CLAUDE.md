@@ -129,6 +129,20 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   delete (in edit modal, double-confirm, cascades + storage cleanup); undo —
   `showToast(msg,{action,onAction})` on task completion. `rerender()` now
   refreshes whichever view is active.
-- Possible next (Tier 3): @mentions + comment editing + recurring tasks;
-  password-reset UI; email digest (needs Edge Function); WordPress read-only
-  dashboard.
+- **Round 2 shipped (2026-07-31):** Reports tab (all users; `renderReports()` —
+  hand-rolled SVG/HTML: completed-per-week bars from `completedAt` (seed done
+  tasks proxy completedAt=due in DEMO only; live history starts at adoption),
+  real on-time %, campaign progress, status donut, stacked workload, overdue
+  rollups, pipeline-by-motion). @mentions (`mentionInput`/`insertMention` on
+  #newcomment, `parseMentions` by '@'+display-name → notify, `decorateMentions`
+  highlights). Comment editing (own; `editingComment` inline; sets
+  `comments.updated_at` → '(edited)'; policy com_upd). Recurring tasks
+  (`tasks.recur` weekly|biweekly|monthly; completing spawns next occurrence via
+  `spawnRecurrence` — recur moves to the new task, subtasks reset, undo removes
+  spawn; 🔁 badges). Password reset (Forgot link → resetPasswordForEmail →
+  PASSWORD_RECOVERY event → #reset-form; Safe Links may eat tokens — fallback is
+  admin SQL). Flags: HAS_RECUR/HAS_CEDIT. Migration: db/upgrade-round2.sql.
+  **Email digest deliberately skipped** (user choice — revisit later; needs Edge
+  Function + provider).
+- Possible next (Tier 3): email digest (Edge Function + SendGrid/Resend),
+  task reordering, bulk actions, add-task from board/calendar.

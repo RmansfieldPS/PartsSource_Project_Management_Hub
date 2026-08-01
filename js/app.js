@@ -31,7 +31,10 @@ let tlMode = 'portfolio', tlProject = null;
 let HAS_LDATE = true; // projects.launch_date column present (false until upgrade-timeline.sql runs)
 let HAS_APPR = true;  // approvals migration present (false until upgrade-approvals.sql runs)
 let HAS_ARCH = true;  // projects.archived column present (false until upgrade-fundamentals.sql runs)
+let HAS_RECUR = true; // tasks.recur column present (false until upgrade-round2.sql runs)
+let HAS_CEDIT = true; // comments.updated_at + edit policy present (false until upgrade-round2.sql runs)
 let drawerEdit = false; // task drawer title/description edit mode
+let editingComment = null; // index of comment being edited inline
 const TL_PPD = 16, TL_LABELW = 230, TL_ROWH = 38, TL_HEADH = 34;
 let calY = TODAY.getFullYear(), calM = TODAY.getMonth();
 
@@ -121,7 +124,7 @@ function buildFromSeed(){
   PROJECTS = S.projects.map(p => ({ ...p, owner:S.owner[p.id], _files:[],
     approverId:p.approver||null,
     _approvals: p.approver ? [{action:'submitted', a:S.owner[p.id]||'RM', note:null, w:'Jul 30'}] : [],
-    tasks: p.tasks.map(t => ({...t, id:'d'+(++n)})) }));
+    tasks: p.tasks.map(t => ({...t, id:'d'+(++n), completedAt: t.s==='done' && t.due ? t.due+'T12:00:00.000Z' : null})) }));
   TEMPLATES = JSON.parse(JSON.stringify(S.templates||[])).map(t=>({...t, description:t.description||'', defaults:t.defaults||{}}));
 }
 
@@ -138,9 +141,11 @@ async function loadLive(){
   if(firstErr){ toast('Load error: '+firstErr.error.message, true); throw firstErr.error; }
   HAS_APPR = (mem.data && mem.data.length) ? ('is_approver' in mem.data[0]) : true;
   TEAM = {}; (mem.data||[]).forEach(m => TEAM[m.id] = {name:m.name, role:m.role, color:m.color, email:m.email, appRole:m.app_role, isApprover:!!m.is_approver});
+  HAS_RECUR = (tsk.data && tsk.data.length) ? ('recur' in tsk.data[0]) : true;
+  HAS_CEDIT = (com.data && com.data.length) ? ('updated_at' in com.data[0]) : true;
   const subBy={}, comBy={}, attBy={}, pfBy={};
   (sub.data||[]).forEach(s => (subBy[s.task_id]=subBy[s.task_id]||[]).push({id:s.id, t:s.title, done:s.done}));
-  (com.data||[]).forEach(c => (comBy[c.task_id]=comBy[c.task_id]||[]).push({id:c.id, a:c.author_id, w:fmtWhen(c.created_at), x:c.body}));
+  (com.data||[]).forEach(c => (comBy[c.task_id]=comBy[c.task_id]||[]).push({id:c.id, a:c.author_id, w:fmtWhen(c.created_at), x:c.body, edited:!!c.updated_at}));
   (att.data||[]).forEach(a => {
     const item={id:a.id, label:a.label, sub:a.sublabel, url:a.url, path:a.path, by:a.uploaded_by};
     if(a.task_id) (attBy[a.task_id]=attBy[a.task_id]||[]).push(item);
@@ -149,7 +154,7 @@ async function loadLive(){
   const tBy={};
   (tsk.data||[]).forEach(t => (tBy[t.project_id]=tBy[t.project_id]||[]).push({
     id:t.id, t:t.title, a:t.assignee_id, due:t.due, pr:t.priority, s:t.status, blockedBy:t.blocked_by, blocks:t.blocks,
-    bt:t.blocked_by_task||null, completedAt:t.completed_at||null,
+    bt:t.blocked_by_task||null, completedAt:t.completed_at||null, recur:t.recur||null,
     _desc:t.description||null, _sub:subBy[t.id]||[], _comments:comBy[t.id]||[], _links:attBy[t.id]||[]
   }));
   // notifications table may not exist until db/upgrade-tier1.sql has run — tolerate that
@@ -266,7 +271,7 @@ function renderProjectDetail(){
     return `
     <div class="trow ${t.s==='done'?'done':''}">
       <button class="check" style="${t.s==='done'?'background:var(--good);border-color:var(--good)':''}${editable?'':';cursor:default;opacity:.55'}" onclick="cycleDone('${p.id}',${i})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="opacity:${t.s==='done'?1:0}"><path d="M20 6L9 17l-5-5"/></svg></button>
-      <div><div class="trow-title" style="cursor:pointer" onclick="openTask('${p.id}',${i})">${esc(t.t)}</div>${(t.bt||t.blockedBy)?`<div class="trow-sub">⛔ Waiting on: ${esc(blockedLabel(p,t))}</div>`:t.blocks?`<div class="trow-sub" style="color:var(--warn)">↗ Blocks ${esc(t.blocks)}</div>`:''}</div>
+      <div><div class="trow-title" style="cursor:pointer" onclick="openTask('${p.id}',${i})">${esc(t.t)}${t.recur?' <span title="Repeats — completing creates the next occurrence">🔁</span>':''}</div>${(t.bt||t.blockedBy)?`<div class="trow-sub">⛔ Waiting on: ${esc(blockedLabel(p,t))}</div>`:t.blocks?`<div class="trow-sub" style="color:var(--warn)">↗ Blocks ${esc(t.blocks)}</div>`:''}</div>
       <div>${editable?`<button class="assignee" onclick="openAssign(event,'${p.id}',${i})">${av(t.a)}${esc(teamName(t.a))}<span class="car">▾</span></button>`:`<span class="assignee" style="cursor:default">${av(t.a)}${esc(teamName(t.a))}</span>`}</div>
       <div class="col-due num t-due ${t.due&&new Date(t.due+'T00:00:00')<TODAY&&t.s!=='done'?'over':''}" style="font-size:12.5px;color:var(--ink-2)">${fmtDue(t.due)}</div>
       <div class="col-prio"><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></div>
@@ -339,7 +344,7 @@ async function addTask(e){
   if(a!==ME) notify(a, `${teamName(ME)} assigned you "${title}" in ${p.name}.`, p.id, p.tasks[p.tasks.length-1].id);
   rerender();
 }
-function setStatus(id,i,v){
+async function setStatus(id,i,v){
   const p=byId(id), t=p.tasks[i], was=t.s;
   if(!canEdit(t)){ denyEdit(); rerender(); return; }
   if(was===v) return;
@@ -349,13 +354,45 @@ function setStatus(id,i,v){
   if(was==='done' && v!=='done'){ t.completedAt=null; fields.completed_at=null; }
   if(LIVE) pUpdate('tasks',t.id,fields);
   if(v==='done') autoUnblock(p,t);
+  // recurring: completing rolls the task forward to its next occurrence
+  let spawned=null; const hadRecur=t.recur;
+  if(v==='done' && was!=='done' && t.recur && HAS_RECUR){ spawned=await spawnRecurrence(p,t); }
   rerender();
   if(v==='done' && was!=='done'){
-    showToast(`Completed "${t.t}"`, { action:'Undo', onAction:()=>{
+    showToast(spawned?`Completed "${t.t}" — next occurrence due ${fmtDue(spawned.due)}`:`Completed "${t.t}"`, { action:'Undo', onAction:async()=>{
       const p2=byId(id); if(!p2) return;
+      if(spawned){
+        const si=p2.tasks.indexOf(spawned);
+        if(si>-1){ p2.tasks.splice(si,1); if(LIVE&&spawned.id){ try{ await sb.from('tasks').delete().eq('id',spawned.id); }catch(_){} } }
+        t.recur=hadRecur; if(LIVE) pUpdate('tasks',t.id,{recur:hadRecur});
+      }
       const idx=p2.tasks.indexOf(t); if(idx>-1) setStatus(id, idx, was);
     }});
   }
+}
+function nextRecurDue(due,recur){
+  const base=due||todayISO();
+  if(recur==='weekly') return addDaysISO(base,7);
+  if(recur==='biweekly') return addDaysISO(base,14);
+  const d=new Date(base+'T00:00:00'); d.setMonth(d.getMonth()+1);
+  const pad=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+async function spawnRecurrence(p,t){
+  const due=nextRecurDue(t.due,t.recur), recur=t.recur;
+  t.recur=null; if(LIVE) pUpdate('tasks',t.id,{recur:null}); // the recurrence moves to the new occurrence
+  let nt;
+  if(LIVE){
+    const d=await pInsert('tasks',{project_id:p.id, title:t.t, assignee_id:t.a, due, priority:t.pr, status:'todo', recur, description:t._desc||null, position:p.tasks.length});
+    if(!d){ t.recur=recur; return null; }
+    nt={id:d.id, t:t.t, a:t.a, due, pr:t.pr, s:'todo', recur, _desc:t._desc, _sub:[], _comments:[], _links:[]};
+    const subs=(t._sub||[]).map((s,si)=>({task_id:d.id, title:s.t, done:false, position:si}));
+    if(subs.length){ try{ const {data}=await sb.from('subtasks').insert(subs).select(); (data||[]).forEach(r=>nt._sub.push({id:r.id, t:r.title, done:false})); }catch(_){} }
+  } else {
+    nt={id:'d'+(++demoSeq)+'r', t:t.t, a:t.a, due, pr:t.pr, s:'todo', recur, _desc:t._desc, _sub:(t._sub||[]).map(s=>({t:s.t, done:false})), _comments:[], _links:[]};
+  }
+  p.tasks.push(nt);
+  return nt;
 }
 function cycleDone(id,i){ const t=byId(id).tasks[i]; setStatus(id,i, t.s==='done'?'todo':'done'); }
 function setTaskField(pid,i,field,val){
@@ -363,6 +400,7 @@ function setTaskField(pid,i,field,val){
   if(!canEdit(t)){ denyEdit(); rerender(); return; }
   if(field==='due'){ t.due=val||null; if(LIVE) pUpdate('tasks',t.id,{due:t.due}); }
   if(field==='pr'){ t.pr=val; if(LIVE) pUpdate('tasks',t.id,{priority:val}); }
+  if(field==='recur'){ t.recur=val||null; if(LIVE&&HAS_RECUR) pUpdate('tasks',t.id,{recur:t.recur}); }
   rerender();
 }
 async function deleteTask(pid,i){
@@ -443,6 +481,7 @@ function rerender(){
   if(isView('projects')) renderProjects(currentFilter);
   if(isView('calendar')) renderCalendar();
   if(isView('timeline')) renderTimeline();
+  if(isView('reports')) renderReports();
   if(currentTask) renderDrawer(currentTask.pid,currentTask.i);
   refreshCounts();
 }
@@ -520,7 +559,7 @@ document.addEventListener('click',e=>{ if(!amenu.contains(e.target)&&!e.target.c
 /* ===================================================================
    RENDER — Task detail drawer
    =================================================================== */
-function openTask(id,i){ const p=byId(id),t=p.tasks[i]; ensureDetail(p,t); drawerEdit=false; currentTask={pid:id,i,taskId:t.id}; renderDrawer(id,i); document.getElementById('drawer').classList.add('open'); document.getElementById('drawer-ov').classList.add('open'); }
+function openTask(id,i){ const p=byId(id),t=p.tasks[i]; ensureDetail(p,t); drawerEdit=false; editingComment=null; currentTask={pid:id,i,taskId:t.id}; renderDrawer(id,i); document.getElementById('drawer').classList.add('open'); document.getElementById('drawer-ov').classList.add('open'); }
 function closeDrawer(){ currentTask=null; document.getElementById('drawer').classList.remove('open'); document.getElementById('drawer-ov').classList.remove('open'); }
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ closeDrawer(); closeModal(); closeBell(); document.getElementById('search-results').classList.remove('open'); } });
 function renderDrawer(id,i){
@@ -541,6 +580,7 @@ function renderDrawer(id,i){
         <span class="fl">Status</span><span><select class="status-sel" ${canEdit(t)?'':'disabled'} onchange="setStatus('${p.id}',${i},this.value)">${ORDER.map(s=>`<option value="${s}" ${t.s===s?'selected':''}>${STATUS[s].label}</option>`).join('')}</select></span>
         <span class="fl">Due date</span><span>${canEdit(t)?`<input type="date" class="status-sel" value="${t.due||''}" onchange="setTaskField('${p.id}',${i},'due',this.value)" />${over?` <span class="t-due over" style="font-size:11px;font-weight:700">Overdue</span>`:''}`:`<span class="num t-due ${over?'over':''}" style="font-weight:600">${over?'Overdue · ':''}${fmtDue(t.due)}</span>`}</span>
         <span class="fl">Priority</span><span>${canEdit(t)?`<select class="status-sel" onchange="setTaskField('${p.id}',${i},'pr',this.value)"><option value="high" ${t.pr==='high'?'selected':''}>High</option><option value="med" ${t.pr==='med'?'selected':''}>Medium</option><option value="low" ${t.pr==='low'?'selected':''}>Low</option></select>`:`<span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span>`}</span>
+        ${HAS_RECUR?`<span class="fl">Repeats</span><span>${canEdit(t)?`<select class="status-sel" onchange="setTaskField('${p.id}',${i},'recur',this.value)"><option value="">Never</option><option value="weekly" ${t.recur==='weekly'?'selected':''}>Weekly</option><option value="biweekly" ${t.recur==='biweekly'?'selected':''}>Every 2 weeks</option><option value="monthly" ${t.recur==='monthly'?'selected':''}>Monthly</option></select>`:`<span style="font-size:12.5px;font-weight:600;color:var(--ink-2)">${t.recur?{weekly:'Weekly',biweekly:'Every 2 weeks',monthly:'Monthly'}[t.recur]:'—'}</span>`}${t.recur?' <span title="Completing this creates the next occurrence automatically">🔁</span>':''}</span>`:''}
         <span class="fl">Blocked by</span><span><select class="status-sel" style="max-width:100%" ${canEdit(t)?'':'disabled'} onchange="setBlockedBy('${p.id}',${i},this.value)">
           <option value="">— nothing —</option>
           ${p.tasks.filter(x=>x.id!==t.id && x.s!=='done').map(x=>`<option value="${x.id}" ${t.bt===x.id?'selected':''}>${esc(x.t)}</option>`).join('')}
@@ -559,8 +599,11 @@ function renderDrawer(id,i){
       ${t._links.length? t._links.map((l,ai)=>`<div class="att" style="cursor:pointer" onclick="openAtt('${p.id}',${i},${ai})"><span class="ai"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span style="flex:1;min-width:0"><div class="al">${esc(l.label)}</div><div class="as">${esc(l.sub||'')}</div></span>${(canEdit(t)||l.by===ME)?`<button class="icon-btn" style="width:28px;height:28px" title="Remove" onclick="event.stopPropagation();delAtt('${p.id}',${i},${ai})"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`:''}</div>`).join('') : '<div class="att-empty">No files yet.</div>'}
       ${canEdit(t)?`<button class="btn sm" style="margin-top:8px" onclick="pickFile('${p.id}',{i:${i}})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>Attach file</button>`:''}
       <div class="d-sec">Activity</div>
-      ${t._comments.map((c,ci)=>`<div class="activity">${av(c.a)}<div class="aline" style="min-width:0"><span class="an">${esc(teamName(c.a))}</span> ${esc(c.x)}<div class="aw">${esc(c.w)}</div></div>${(c.a===ME||isAdminMe())&&(!LIVE||c.id)?`<button class="mini-del" title="Delete comment" onclick="delComment('${p.id}',${i},${ci})">✕</button>`:''}</div>`).join('') || '<div class="att-empty">No activity yet.</div>'}
-      <form class="commentbox" onsubmit="addComment(event,'${p.id}',${i})">${av(ME)}<textarea id="newcomment" placeholder="Write a comment…"></textarea><button class="btn primary sm" type="submit">Post</button></form>
+      ${t._comments.map((c,ci)=> editingComment===ci
+        ? `<div class="activity">${av(c.a)}<div class="aline" style="min-width:0"><textarea id="ec-body" style="width:100%;min-height:56px;border:1px solid var(--line-strong);border-radius:8px;padding:7px 9px;font-size:13px;font-family:inherit;background:var(--surface);color:var(--ink);resize:vertical">${esc(c.x)}</textarea><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px"><button class="btn sm" onclick="editingComment=null;renderDrawer('${p.id}',${i})">Cancel</button><button class="btn primary sm" onclick="saveComment('${p.id}',${i},${ci})">Save</button></div></div></div>`
+        : `<div class="activity">${av(c.a)}<div class="aline" style="min-width:0"><span class="an">${esc(teamName(c.a))}</span> ${decorateMentions(esc(c.x))}<div class="aw">${esc(c.w)}${c.edited?' · edited':''}</div></div>${(c.a===ME||isAdminMe())&&(!LIVE||c.id)?`${(!LIVE||HAS_CEDIT)&&c.a===ME?`<button class="mini-del" title="Edit comment" onclick="editingComment=${ci};renderDrawer('${p.id}',${i})">✎</button>`:''}<button class="mini-del" title="Delete comment" onclick="delComment('${p.id}',${i},${ci})">✕</button>`:''}</div>`
+      ).join('') || '<div class="att-empty">No activity yet.</div>'}
+      <form class="commentbox" onsubmit="addComment(event,'${p.id}',${i})">${av(ME)}<textarea id="newcomment" placeholder="Write a comment… use @ to mention a teammate" oninput="mentionInput(event)"></textarea><button class="btn primary sm" type="submit">Post</button></form>
       ${(isAdminMe()||t.a===ME)?`<button class="del-task" onclick="deleteTask('${p.id}',${i})"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>Delete this task</button>`:''}
     </div>`;
 }
@@ -578,8 +621,52 @@ async function addComment(e,id,i){
   const t=byId(id).tasks[i];
   if(LIVE){ const d=await pInsert('comments',{task_id:t.id,author_id:ME,body:v}); if(d) t._comments.push({id:d.id,a:d.author_id,w:fmtWhen(d.created_at),x:d.body}); }
   else t._comments.push({a:ME,w:'Just now',x:v});
+  parseMentions(v).forEach(k=>notify(k, `${teamName(ME)} mentioned you on "${t.t}": ${v.slice(0,90)}`, id, t.id));
   renderDrawer(id,i);
 }
+async function saveComment(pid,i,ci){
+  const t=byId(pid).tasks[i], c=t._comments[ci];
+  if(!(c.a===ME||isAdminMe())){ toast('You can only edit your own comments', true); return; }
+  const v=document.getElementById('ec-body').value.trim(); if(!v) return;
+  const isNew = !parseMentions(c.x).length ? parseMentions(v) : parseMentions(v).filter(k=>!parseMentions(c.x).includes(k));
+  c.x=v; c.edited=true;
+  if(LIVE && c.id && HAS_CEDIT){ const {error}=await sb.from('comments').update({body:v, updated_at:new Date().toISOString()}).eq('id',c.id); if(error) toast('Save failed: '+error.message, true); }
+  isNew.forEach(k=>notify(k, `${teamName(ME)} mentioned you on "${t.t}": ${v.slice(0,90)}`, pid, t.id));
+  editingComment=null;
+  renderDrawer(pid,i);
+}
+
+/* ---------- @mentions ---------- */
+let mmenuTarget=null;
+function mentionInput(e){
+  const ta=e.target, pos=ta.selectionStart;
+  const upto=ta.value.slice(0,pos), m=upto.match(/@(\w*)$/);
+  const menu=document.getElementById('mmenu');
+  if(!m){ menu.classList.remove('open'); mmenuTarget=null; return; }
+  const q=m[1].toLowerCase();
+  const hits=Object.keys(TEAM).filter(k=>k!==ME && (TEAM[k].name.toLowerCase().includes(q) || k.toLowerCase().startsWith(q)));
+  if(!hits.length){ menu.classList.remove('open'); mmenuTarget=null; return; }
+  mmenuTarget={ta, start:pos-m[0].length, end:pos};
+  menu.innerHTML=`<div class="ah">Mention</div>`+hits.map(k=>`<button type="button" onmousedown="event.preventDefault();insertMention('${k}')">${av(k)}<span>${esc(TEAM[k].name)}</span></button>`).join('');
+  const r=ta.getBoundingClientRect();
+  menu.style.left=Math.min(r.left, window.innerWidth-220)+'px';
+  menu.style.top=Math.max(8, r.top-(hits.length*38+34))+'px';
+  menu.classList.add('open');
+}
+function insertMention(k){
+  if(!mmenuTarget) return;
+  const {ta,start,end}=mmenuTarget;
+  const mention='@'+TEAM[k].name+' ';
+  ta.value=ta.value.slice(0,start)+mention+ta.value.slice(end);
+  ta.focus(); const np=start+mention.length; ta.setSelectionRange(np,np);
+  document.getElementById('mmenu').classList.remove('open'); mmenuTarget=null;
+}
+function parseMentions(text){ return Object.keys(TEAM).filter(k=>text.includes('@'+TEAM[k].name)); }
+function decorateMentions(escaped){
+  Object.keys(TEAM).forEach(k=>{ const m=esc('@'+TEAM[k].name); escaped=escaped.split(m).join(`<span class="mention">${m}</span>`); });
+  return escaped;
+}
+document.addEventListener('click',e=>{ const mm=document.getElementById('mmenu'); if(mm && !mm.contains(e.target) && e.target.id!=='newcomment') mm.classList.remove('open'); });
 
 /* ===================================================================
    Campaign approvals
@@ -905,7 +992,7 @@ function renderMyTasks(){
     const crit=name==='Overdue';
     return `<div class="task-group"><div class="tg-head"><h3 style="${crit?'color:var(--crit)':''}">${name}</h3><span class="tg-count num">${arr.length}</span></div>${arr.map(({t,p,i})=>{
       const over=t.due&&new Date(t.due+'T00:00:00')<TODAY;
-      return `<div class="task"><button class="check" onclick="cycleDone('${p.id}',${i})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></button><div class="t-body"><div class="t-title" style="cursor:pointer" onclick="openTask('${p.id}',${i})">${esc(t.t)}</div><div class="t-meta"><span class="tag" style="cursor:pointer" onclick="openProject('${p.id}')">${esc(p.name)}</span><span class="t-due ${over?'over':''}">${over?'Overdue · ':'Due '}${fmtDue(t.due)}</span>${(t.bt||t.blockedBy)?`<span class="pill crit" style="font-size:11px">Blocked</span>`:''}${t.blocks?`<span class="pill crit plain" style="font-size:11px">Blocks work</span>`:''}</div></div><div class="t-right"><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></div></div>`;
+      return `<div class="task"><button class="check" onclick="cycleDone('${p.id}',${i})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></button><div class="t-body"><div class="t-title" style="cursor:pointer" onclick="openTask('${p.id}',${i})">${esc(t.t)}${t.recur?' <span title="Repeats">🔁</span>':''}</div><div class="t-meta"><span class="tag" style="cursor:pointer" onclick="openProject('${p.id}')">${esc(p.name)}</span><span class="t-due ${over?'over':''}">${over?'Overdue · ':'Due '}${fmtDue(t.due)}</span>${(t.bt||t.blockedBy)?`<span class="pill crit" style="font-size:11px">Blocked</span>`:''}${t.blocks?`<span class="pill crit plain" style="font-size:11px">Blocks work</span>`:''}</div></div><div class="t-right"><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></div></div>`;
     }).join('')}</div>`;
   }).join('');
 }
@@ -927,7 +1014,7 @@ function renderBoard(id){
       .filter(o=>!FILT.board.pr || o.t.pr===FILT.board.pr);
     return `<div class="col" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropCard(event,'${p.id}','${s}')"><div class="col-h"><span class="dot" style="background:${STATUS[s].dot}"></span><span class="name">${STATUS[s].label}</span><span class="n num">${items.length}</span></div>${items.map(({t,idx})=>`
       <div class="kanban" draggable="${canEdit(t)?'true':'false'}" ondragstart="dragStart(event,'${p.id}',${idx})" ondragend="dragEnd(event)" onclick="cardClick('${p.id}',${idx})" ${s==='blocked'?'style="border-color:color-mix(in srgb, var(--crit) 40%, var(--line))"':''}>
-        <div class="kt">${esc(t.t)}</div>
+        <div class="kt">${esc(t.t)}${t.recur?' <span title="Repeats">🔁</span>':''}</div>
         <div class="kmeta"><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></div>
         ${(t.bt||t.blockedBy)?`<div class="blocked-note"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>${esc(blockedLabel(p,t))}</div>`:''}
         <div class="kfoot">${av(t.a)}<span class="t-due num" style="font-size:11px;${t.due&&new Date(t.due+'T00:00:00')<TODAY&&s!=='done'?'color:var(--crit)':'color:var(--ink-3)'}">${s==='done'?'Done':fmtDue(t.due)}</span></div>
@@ -1170,6 +1257,95 @@ function tlDragEnd(e){
 }
 function tlMarkerClick(e,pid,idx){ if(tlSuppress) return; openTask(pid,idx); }
 
+/* ===================================================================
+   RENDER — Reports
+   =================================================================== */
+function weekKey(iso){ const d=new Date(iso+'T00:00:00'); d.setDate(d.getDate()-d.getDay()); const pad=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
+function renderReports(){
+  const vis=visibleProjects();
+  const allTasks=vis.flatMap(p=>p.tasks.map(t=>({t,p})));
+  const t0=todayISO();
+
+  // 1. completed per week (last 10 weeks)
+  const weeks=[]; { const d=new Date(TODAY); d.setDate(d.getDate()-d.getDay()); const pad=n=>String(n).padStart(2,'0');
+    for(let k=9;k>=0;k--){ const w=new Date(d); w.setDate(w.getDate()-7*k); weeks.push(`${w.getFullYear()}-${pad(w.getMonth()+1)}-${pad(w.getDate())}`); } }
+  const doneByWeek={}; weeks.forEach(w=>doneByWeek[w]=0);
+  allTasks.forEach(({t})=>{ if(t.s==='done'&&t.completedAt){ const wk=weekKey(t.completedAt.slice(0,10)); if(wk in doneByWeek) doneByWeek[wk]++; } });
+  const maxW=Math.max(...Object.values(doneByWeek),1), barW=40;
+  const bars=weeks.map((w,ix)=>{ const v=doneByWeek[w], h=Math.round(v/maxW*92), d=new Date(w+'T00:00:00');
+    return `<g><rect x="${ix*barW+7}" y="${106-h}" width="${barW-14}" height="${Math.max(h,2)}" rx="3" fill="${v?'var(--accent)':'var(--line)'}"><title>${v} completed · week of ${MONTHS[d.getMonth()]} ${d.getDate()}</title></rect>
+      ${v?`<text x="${ix*barW+barW/2}" y="${100-h}" text-anchor="middle" font-size="10" font-weight="700" fill="var(--ink-2)">${v}</text>`:''}
+      <text x="${ix*barW+barW/2}" y="122" text-anchor="middle" font-size="8.5" fill="var(--ink-3)">${MONTHS[d.getMonth()]} ${d.getDate()}</text></g>`; }).join('');
+
+  // 2. on-time rate
+  const judged=allTasks.filter(({t})=>t.s==='done'&&t.completedAt&&t.due);
+  const onTime=judged.filter(({t})=>t.completedAt.slice(0,10)<=t.due).length;
+  const rate=judged.length?Math.round(onTime/judged.length*100):null;
+  const rateColor=r=>r>=80?'var(--good)':r>=60?'var(--warn)':'var(--crit)';
+  const perPerson=Object.keys(TEAM).map(k=>{ const mine=judged.filter(x=>x.t.a===k); const ot=mine.filter(x=>x.t.completedAt.slice(0,10)<=x.t.due).length; return {k, n:mine.length, r:mine.length?Math.round(ot/mine.length*100):0}; }).filter(x=>x.n);
+
+  // 3+4. campaign progress + status donut
+  const prog=vis.filter(p=>p.status!=='complete').map(p=>({p,pr:progress(p)})).sort((a,b)=>b.pr.pct-a.pr.pct);
+  const stCounts={}; vis.forEach(p=>stCounts[p.status]=(stCounts[p.status]||0)+1);
+  const donutColors={active:'var(--accent)',planning:'var(--ink-3)',review:'var(--warn)',complete:'var(--good)'};
+  const stLabel={active:'Active',planning:'In planning',review:'Under review',complete:'Completed'};
+  const totalC=vis.length||1, C=2*Math.PI*40; let acc=0;
+  const donutSegs=Object.keys(donutColors).filter(k=>stCounts[k]).map(k=>{ const frac=stCounts[k]/totalC;
+    const seg=`<circle r="40" cx="60" cy="60" fill="none" stroke="${donutColors[k]}" stroke-width="15" stroke-dasharray="${(frac*C).toFixed(2)} ${C.toFixed(2)}" stroke-dashoffset="${(-acc*C).toFixed(2)}" transform="rotate(-90 60 60)"><title>${stLabel[k]}: ${stCounts[k]}</title></circle>`;
+    acc+=frac; return seg; }).join('');
+
+  // 5. workload stacked + overdue
+  const wl=Object.keys(TEAM).map(k=>{ const c={todo:0,progress:0,blocked:0,review:0};
+    allTasks.forEach(({t})=>{ if(t.a===k&&c[t.s]!=null)c[t.s]++; });
+    return {k,c,total:c.todo+c.progress+c.blocked+c.review}; });
+  const wlMax=Math.max(...wl.map(x=>x.total),1);
+  const overdue=allTasks.filter(({t})=>t.due&&t.due<t0&&t.s!=='done');
+  const odByCamp={}, odByA={};
+  overdue.forEach(({t,p})=>{ odByCamp[p.name]=(odByCamp[p.name]||0)+1; odByA[t.a]=(odByA[t.a]||0)+1; });
+
+  // 6. pipeline by motion
+  const pipe={recruit:0,grow:0,retain:0};
+  vis.filter(p=>p.status==='active').forEach(p=>{ if(pipe[p.motion]!=null) pipe[p.motion]+=parseValue(p.value); });
+  const pipeSum=Object.values(pipe).reduce((a,b)=>a+b,0), pipeMax=Math.max(...Object.values(pipe),1);
+  const motionColor={recruit:'var(--recruit)',grow:'var(--grow)',retain:'var(--retain)'};
+
+  document.getElementById('reports-body').innerHTML=`
+  <div class="card rep"><div class="card-h"><h3>Tasks completed per week</h3><span class="page-sub" style="margin-left:auto">last 10 weeks</span></div>
+    <div style="padding:4px 14px 12px"><svg viewBox="0 0 400 128" width="100%">${bars}</svg></div></div>
+
+  <div class="card rep"><div class="card-h"><h3>On-time completion</h3><span class="page-sub" style="margin-left:auto">${judged.length} dated completions</span></div>
+    <div style="padding:2px 18px 16px">
+      <div class="num" style="font-size:38px;font-weight:760;letter-spacing:-1px;color:${rate==null?'var(--ink-3)':rateColor(rate)}">${rate==null?'—':rate+'%'}</div>
+      <div class="page-sub" style="margin-bottom:12px">${rate==null?'Fills in as dated tasks get completed.':'finished on or before their due date'}</div>
+      ${perPerson.map(x=>`<div class="wl-row">${av(x.k)}<div style="width:106px;font-weight:600">${esc(TEAM[x.k].name)}</div><div class="wl-bar"><span style="width:${x.r}%;background:${rateColor(x.r)}"></span></div><span class="num" style="width:74px;text-align:right;font-weight:700">${x.r}% <span style="color:var(--ink-3);font-weight:600">(${x.n})</span></span></div>`).join('')}
+    </div></div>
+
+  <div class="card rep"><div class="card-h"><h3>Campaign progress</h3><span class="page-sub" style="margin-left:auto">open campaigns</span></div>
+    <div style="padding:2px 18px 16px">${prog.map(({p,pr})=>`<div class="wl-row" style="cursor:pointer" onclick="openProject('${p.id}')"><div style="width:170px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(p.name)}">${esc(p.name)}</div><div class="wl-bar"><span style="width:${pr.pct}%;background:${projStatus(p)==='atrisk'?'var(--crit)':'var(--accent)'}"></span></div><span class="num" style="width:76px;text-align:right;font-weight:700">${pr.pct}% <span style="color:var(--ink-3);font-weight:600">${pr.done}/${pr.total}</span></span></div>`).join('')||'<div class="att-empty">No open campaigns.</div>'}</div></div>
+
+  <div class="card rep"><div class="card-h"><h3>Campaigns by status</h3><span class="page-sub" style="margin-left:auto">${vis.length} campaigns</span></div>
+    <div style="padding:10px 18px 16px;display:flex;align-items:center;gap:26px;flex-wrap:wrap">
+      <svg viewBox="0 0 120 120" width="130" height="130">${donutSegs}<text x="60" y="67" text-anchor="middle" font-size="24" font-weight="700" fill="var(--ink)">${vis.length}</text></svg>
+      <div>${Object.keys(donutColors).filter(k=>stCounts[k]).map(k=>`<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;font-weight:600"><span style="width:10px;height:10px;border-radius:3px;background:${donutColors[k]};flex:none"></span>${stLabel[k]} <span class="num" style="color:var(--ink-3)">· ${stCounts[k]}</span></div>`).join('')}</div>
+    </div></div>
+
+  <div class="card rep"><div class="card-h"><h3>Open work by person</h3><span class="page-sub" style="margin-left:auto">by status</span></div>
+    <div style="padding:2px 18px 16px">
+      ${wl.map(x=>`<div class="wl-row">${av(x.k)}<div style="width:106px;font-weight:600">${esc(TEAM[x.k].name)}</div><div class="wl-bar" style="display:flex;overflow:hidden">${['todo','progress','blocked','review'].map(s=>x.c[s]?`<span style="display:block;height:100%;width:${x.c[s]/wlMax*100}%;background:${STATUS[s].dot}" title="${STATUS[s].label}: ${x.c[s]}"></span>`:'').join('')}</div><span class="num" style="width:26px;text-align:right;font-weight:700">${x.total}</span></div>`).join('')}
+      <div style="display:flex;gap:14px;margin-top:10px;flex-wrap:wrap">${['todo','progress','blocked','review'].map(s=>`<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:650;color:var(--ink-3)"><span style="width:8px;height:8px;border-radius:2px;background:${STATUS[s].dot}"></span>${STATUS[s].label}</span>`).join('')}</div>
+    </div></div>
+
+  <div class="card rep"><div class="card-h"><h3>Overdue</h3><span class="pill ${overdue.length?'crit':'good'} plain" style="margin-left:auto">${overdue.length} task${overdue.length===1?'':'s'}</span></div>
+    <div style="padding:2px 18px 16px">
+      ${overdue.length?`<div class="bp-head" style="padding:8px 0 2px">By campaign</div>${Object.entries(odByCamp).sort((a,b)=>b[1]-a[1]).map(([n,c])=>`<div class="wl-row" style="padding:7px 0"><div style="flex:1;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(n)}</div><span class="num" style="font-weight:700;color:var(--crit)">${c}</span></div>`).join('')}
+      <div class="bp-head" style="padding:12px 0 2px">By person</div>${Object.entries(odByA).sort((a,b)=>b[1]-a[1]).map(([k,c])=>`<div class="wl-row" style="padding:7px 0">${av(k)}<div style="flex:1;font-weight:600">${esc(teamName(k))}</div><span class="num" style="font-weight:700;color:var(--crit)">${c}</span></div>`).join('')}`
+      :'<div class="att-empty" style="padding-top:8px">Nothing is overdue right now.</div>'}
+    </div></div>
+
+  <div class="card rep" style="grid-column:1 / -1"><div class="card-h"><h3>Active pipeline by motion</h3><span class="page-sub" style="margin-left:auto">${fmtMoney(pipeSum)} projected across active campaigns</span></div>
+    <div style="padding:2px 18px 16px">${Object.keys(pipe).map(m=>`<div class="wl-row"><span class="motion ${m}" style="width:74px;text-align:center">${m}</span><div class="wl-bar"><span style="width:${Math.round(pipe[m]/pipeMax*100)}%;background:${motionColor[m]}"></span></div><span class="num" style="width:70px;text-align:right;font-weight:700">${fmtMoney(pipe[m])}</span></div>`).join('')}</div></div>`;
+}
+
 /* ---------- Filter select options (members are static per session) ---------- */
 function fillFilterOptions(){
   const mem = k => Object.keys(TEAM).map(c=>`<option value="${c}">${esc(TEAM[c].name)}</option>`).join('');
@@ -1209,7 +1385,7 @@ document.addEventListener('click',e=>{ if(!e.target.closest('.search')) document
 /* ===================================================================
    Navigation
    =================================================================== */
-const titles = { dashboard:['Dashboard','Demand Gen campaign portfolio'], mytasks:['My Tasks',"Everything assigned to you, grouped by when it's due"], board:['Board','Kanban view · drag tasks across stages'], projects:['Campaigns','All Demand Gen campaigns and their progress'], project:['Campaign','Tasks, owner & assignments'], calendar:['Calendar','Every task on its due date'], timeline:['Timeline','Campaigns and tasks across time'], team:['Team','People, sign-ins & permissions'], templates:['Templates','Reusable campaign playbooks'], roadblocks:['Roadblocks','Tasks blocked by upstream work or inputs'] };
+const titles = { dashboard:['Dashboard','Demand Gen campaign portfolio'], mytasks:['My Tasks',"Everything assigned to you, grouped by when it's due"], board:['Board','Kanban view · drag tasks across stages'], projects:['Campaigns','All Demand Gen campaigns and their progress'], project:['Campaign','Tasks, owner & assignments'], calendar:['Calendar','Every task on its due date'], timeline:['Timeline','Campaigns and tasks across time'], reports:['Reports','Completion, workload & pipeline at a glance'], team:['Team','People, sign-ins & permissions'], templates:['Templates','Reusable campaign playbooks'], roadblocks:['Roadblocks','Tasks blocked by upstream work or inputs'] };
 function show(view){
   if((view==='team'||view==='templates') && !isAdminMe()) view='dashboard';
   currentView=view;
@@ -1225,6 +1401,7 @@ function show(view){
   if(view==='projects') renderProjects(currentFilter);
   if(view==='calendar') renderCalendar();
   if(view==='timeline') renderTimeline();
+  if(view==='reports') renderReports();
   if(view==='team') renderTeam();
   if(view==='templates') renderTemplates();
   if(view==='roadblocks') renderRoadblocks();
@@ -1519,6 +1696,32 @@ async function authSubmit(e){
   if(session) afterLogin();
 }
 async function signOut(){ await sb.auth.signOut(); location.reload(); }
+async function forgotPassword(){
+  if(!LIVE) return;
+  const email=document.getElementById('auth-email').value.trim();
+  const errEl=document.getElementById('auth-err');
+  if(!email){ errEl.style.color=''; errEl.textContent='Type your work email above first, then click Forgot password.'; return; }
+  const {error}=await sb.auth.resetPasswordForEmail(email, {redirectTo: location.origin+location.pathname});
+  errEl.style.color = error ? '' : 'var(--good)';
+  errEl.textContent = error ? error.message : 'Reset link sent — check your email (may take a minute).';
+}
+function showRecoveryForm(){
+  showAuth();
+  document.getElementById('signin-form').style.display='none';
+  document.getElementById('auth-toggle').style.display='none';
+  document.getElementById('auth-forgot').style.display='none';
+  document.getElementById('auth-title').textContent='Set a new password';
+  document.getElementById('reset-form').style.display='';
+}
+async function doPasswordReset(e){
+  e.preventDefault();
+  const pw=document.getElementById('reset-pw').value;
+  const errEl=document.getElementById('reset-err');
+  const {error}=await sb.auth.updateUser({password:pw});
+  if(error){ errEl.textContent=error.message; return; }
+  errEl.style.color='var(--good)'; errEl.textContent='Password updated — signing you in…';
+  setTimeout(()=>location.reload(), 900);
+}
 
 /* ===================================================================
    Realtime (live only)
@@ -1591,6 +1794,7 @@ async function boot(){
   if(!LIVE) document.getElementById('demo-banner').style.display='flex';
 
   if(LIVE){
+    sb.auth.onAuthStateChange((event)=>{ if(event==='PASSWORD_RECOVERY') showRecoveryForm(); });
     const {data:{session}}=await sb.auth.getSession();
     if(!session){ showAuth(); return; }
     await afterLogin();

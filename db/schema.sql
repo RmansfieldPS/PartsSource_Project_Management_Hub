@@ -14,6 +14,7 @@ create table if not exists members (
   color    text,
   email    text,                     -- must match their sign-in email
   app_role text default 'user' check (app_role in ('admin','user')),
+  is_approver boolean default false, -- may approve campaigns assigned to them
   sort     int default 0
 );
 
@@ -32,8 +33,18 @@ create table if not exists projects (
   status      text not null default 'active' check (status in ('active','planning','review','complete')),
   owner_id    text references members(id),
   blocker     text,
+  approver_id text references members(id),  -- null = no approval required
   sort        int default 0,
   created_at  timestamptz default now()
+);
+
+create table if not exists approvals (
+  id         uuid primary key default gen_random_uuid(),
+  project_id text references projects(id) on delete cascade,
+  actor_id   text references members(id),
+  action     text not null check (action in ('submitted','approved','changes')),
+  note       text,
+  created_at timestamptz default now()
 );
 
 create table if not exists tasks (
@@ -113,8 +124,9 @@ alter table comments      enable row level security;
 alter table attachments   enable row level security;
 alter table notifications enable row level security;
 alter table templates     enable row level security;
--- (upgrade-roles.sql / upgrade-files.sql / upgrade-templates.sql create the
---  helper functions and per-table policies.)
+alter table approvals     enable row level security;
+-- (upgrade-roles.sql / upgrade-files.sql / upgrade-templates.sql /
+--  upgrade-approvals.sql create the helper functions and per-table policies.)
 
 -- ---------- Realtime ----------
 -- Push live changes to every connected client.

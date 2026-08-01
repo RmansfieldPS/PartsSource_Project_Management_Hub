@@ -29,6 +29,7 @@ let TEMPLATES = [];   // campaign templates library
 let editingTpl = null;
 let tlMode = 'portfolio', tlProject = null;
 let HAS_LDATE = true; // projects.launch_date column present (false until upgrade-timeline.sql runs)
+let HAS_APPR = true;  // approvals migration present (false until upgrade-approvals.sql runs)
 const TL_PPD = 16, TL_LABELW = 230, TL_ROWH = 38, TL_HEADH = 34;
 let calY = TODAY.getFullYear(), calM = TODAY.getMonth();
 
@@ -48,6 +49,20 @@ function isAdminMe(){ const r = TEAM[ME] && TEAM[ME].appRole; return r === 'admi
 function canEdit(t){ return isAdminMe() || t.a === ME; }
 function denyEdit(){ toast("Only the assignee or an admin can change this task", true); }
 function upstreamOf(p,t){ return t.bt ? p.tasks.find(x=>x.id===t.bt) : null; }
+/* Approval state: null = no approval required (no approver designated). */
+function approvalState(p){
+  if(!p.approverId) return null;
+  const ev=p._approvals||[], last=ev[ev.length-1];
+  if(!last || last.action==='submitted') return 'pending';
+  return last.action; // 'approved' | 'changes'
+}
+const APPR_PILL = { pending:['warn','Pending approval'], approved:['good','Approved'], changes:['crit','Changes requested'] };
+function apprChip(p, small){
+  const st=approvalState(p); if(!st) return '';
+  const [cls,label]=APPR_PILL[st];
+  return `<span class="pill ${cls} ${small?'plain':''}" style="${small?'font-size:10.5px':''}">${label}</span>`;
+}
+function canApprove(p){ return ME===p.approverId || isAdminMe(); }
 function blockedLabel(p,t){ const u=upstreamOf(p,t); return u ? u.t : (t.blockedBy||''); }
 function fmtMoney(n){ if(n>=1e6) return '$'+(n/1e6).toFixed(n>=1e7?0:1)+'M'; if(n>=1e3) return '$'+Math.round(n/1e3)+'K'; return '$'+Math.round(n); }
 function fmtSize(b){ if(b>=1048576) return (b/1048576).toFixed(1)+' MB'; if(b>=1024) return Math.round(b/1024)+' KB'; return b+' B'; }
@@ -86,10 +101,13 @@ function ensureDetail(p,t){
    =================================================================== */
 function buildFromSeed(){
   const S = window.PMPM_SEED;
-  TEAM = {}; S.members.forEach(m => TEAM[m.id] = {name:m.name, role:m.role, color:m.color, email:m.email, appRole:m.app_role});
+  TEAM = {}; S.members.forEach(m => TEAM[m.id] = {name:m.name, role:m.role, color:m.color, email:m.email, appRole:m.app_role, isApprover:!!m.is_approver});
   OWNER = S.owner; DETAIL = S.detail;
   let n = 0;
-  PROJECTS = S.projects.map(p => ({ ...p, owner:S.owner[p.id], _files:[], tasks: p.tasks.map(t => ({...t, id:'d'+(++n)})) }));
+  PROJECTS = S.projects.map(p => ({ ...p, owner:S.owner[p.id], _files:[],
+    approverId:p.approver||null,
+    _approvals: p.approver ? [{action:'submitted', a:S.owner[p.id]||'RM', note:null, w:'Jul 30'}] : [],
+    tasks: p.tasks.map(t => ({...t, id:'d'+(++n)})) }));
   TEMPLATES = JSON.parse(JSON.stringify(S.templates||[])).map(t=>({...t, description:t.description||'', defaults:t.defaults||{}}));
 }
 
@@ -104,7 +122,8 @@ async function loadLive(){
   ]);
   const firstErr = [mem,prj,tsk,sub,com,att].find(r=>r.error);
   if(firstErr){ toast('Load error: '+firstErr.error.message, true); throw firstErr.error; }
-  TEAM = {}; (mem.data||[]).forEach(m => TEAM[m.id] = {name:m.name, role:m.role, color:m.color, email:m.email, appRole:m.app_role});
+  HAS_APPR = (mem.data && mem.data.length) ? ('is_approver' in mem.data[0]) : true;
+  TEAM = {}; (mem.data||[]).forEach(m => TEAM[m.id] = {name:m.name, role:m.role, color:m.color, email:m.email, appRole:m.app_role, isApprover:!!m.is_approver});
   const subBy={}, comBy={}, attBy={}, pfBy={};
   (sub.data||[]).forEach(s => (subBy[s.task_id]=subBy[s.task_id]||[]).push({id:s.id, t:s.title, done:s.done}));
   (com.data||[]).forEach(c => (comBy[c.task_id]=comBy[c.task_id]||[]).push({id:c.id, a:c.author_id, w:fmtWhen(c.created_at), x:c.body}));
@@ -130,10 +149,17 @@ async function loadLive(){
     TEMPLATES = tr.error ? [] : (tr.data||[]).map(r=>({id:r.id, name:r.name, description:r.description||'', defaults:r.defaults||{}, steps:r.steps||[], by:r.created_by}));
   } catch(_) { TEMPLATES = []; }
   HAS_LDATE = (prj.data && prj.data.length) ? ('launch_date' in prj.data[0]) : true;
+  // approvals table may not exist until db/upgrade-approvals.sql has run — tolerate that
+  let aprBy={};
+  try {
+    const ar = await sb.from('approvals').select('*').order('created_at');
+    if(!ar.error) (ar.data||[]).forEach(a=>(aprBy[a.project_id]=aprBy[a.project_id]||[]).push({id:a.id, action:a.action, a:a.actor_id, note:a.note, w:fmtWhen(a.created_at)}));
+  } catch(_) {}
   PROJECTS = (prj.data||[]).map(p => ({
     id:p.id, name:p.name, desc:p.description, segment:p.segment, motion:p.motion, solution:p.solution,
     pipeline:p.pipeline, value:p.value, audience:p.audience, launch:p.launch, launchDate:p.launch_date||null, status:p.status,
-    blocker:p.blocker, owner:p.owner_id, tasks:tBy[p.id]||[], _files:pfBy[p.id]||[]
+    blocker:p.blocker, owner:p.owner_id, approverId:p.approver_id||null, _approvals:aprBy[p.id]||[],
+    tasks:tBy[p.id]||[], _files:pfBy[p.id]||[]
   }));
 }
 
@@ -166,7 +192,7 @@ function renderDashboard(){
 
   document.getElementById('dash-active').innerHTML = PROJECTS.filter(p=>p.status==='active').map(p=>{
     const pr=progress(p), st=STATUS_PILL[projStatus(p)];
-    return `<tr class="clickable" onclick="openProject('${p.id}')"><td class="proj-name">${esc(p.name)}</td><td>${av(ownerOf(p))}</td><td><span class="motion ${p.motion}">${esc(p.motion)}</span></td><td><div style="display:flex;align-items:center;gap:9px"><div class="bar"><span style="width:${pr.pct}%"></span></div><span class="num" style="font-size:12px;color:var(--ink-3)">${pr.pct}%</span></div></td><td class="num">${esc((p.launch||'').split('·')[0].trim())}</td><td><span class="pill ${st[0]}">${st[1]}</span></td></tr>`;
+    return `<tr class="clickable" onclick="openProject('${p.id}')"><td class="proj-name">${esc(p.name)}</td><td>${av(ownerOf(p))}</td><td><span class="motion ${p.motion}">${esc(p.motion)}</span></td><td><div style="display:flex;align-items:center;gap:9px"><div class="bar"><span style="width:${pr.pct}%"></span></div><span class="num" style="font-size:12px;color:var(--ink-3)">${pr.pct}%</span></div></td><td class="num">${esc((p.launch||'').split('·')[0].trim())}</td><td><div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start"><span class="pill ${st[0]}">${st[1]}</span>${apprChip(p,true)}</div></td></tr>`;
   }).join('') || `<tr><td colspan="6" style="color:var(--ink-3)">No active campaigns.</td></tr>`;
 
   const counts={}; Object.keys(TEAM).forEach(k=>counts[k]=0);
@@ -203,7 +229,7 @@ function renderProjects(filter){
     const pr=progress(p), stKey=projStatus(p), st=STATUS_PILL[stKey];
     return `<div class="pcard t-${stKey}" onclick="openProject('${p.id}')">
       <div class="ph"><div style="flex:1"><div class="pn">${esc(p.name)}</div><div class="pd">${esc(p.desc)}</div></div><span class="pill ${st[0]}">${st[1]}</span></div>
-      <div class="ptags"><span class="motion ${p.motion}">${esc(p.motion)}</span><span class="tag">${esc(p.segment)}</span></div>
+      <div class="ptags"><span class="motion ${p.motion}">${esc(p.motion)}</span><span class="tag">${esc(p.segment)}</span>${apprChip(p)}</div>
       <div class="bar"><span style="width:${pr.pct}%${stKey==='atrisk'?';background:linear-gradient(90deg,var(--warn),var(--crit))':''}"></span></div>
       <div class="prow"><span>${pr.done} of ${pr.total} tasks</span><span class="pct num">${pr.pct}%</span></div>
       <div class="prow"><span class="chip-person">${av(ownerOf(p))}${esc(teamName(ownerOf(p)))}</span><span class="num" style="${stKey==='atrisk'?'color:var(--crit)':''}">${esc((p.launch||'').split('·')[0].trim())}</span></div>
@@ -242,6 +268,22 @@ function renderProjectDetail(){
       <div class="meta-item"><div class="ml">Launch</div><div class="mv">${esc(p.launch)||'—'}</div></div>
     </div>
     ${p.blocker?`<div class="pd-blocker"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span><b>Blocker:</b> ${esc(p.blocker)}</span></div>`:''}
+    ${(function(){
+      const st=approvalState(p); if(!st) return '';
+      const last=(p._approvals||[])[p._approvals.length-1]||{};
+      const cls = st==='approved'?'info':st==='changes'?'crit':'warn';
+      const label = st==='pending' ? `Waiting on <b style="margin:0 4px">${esc(teamName(p.approverId))}</b> to approve this campaign.`
+                  : st==='approved' ? `Approved by <b style="margin:0 4px">${esc(teamName(last.a))}</b> ${esc(last.w||'')}.`
+                  : `<b style="margin-right:4px">${esc(teamName(last.a))}</b> requested changes${last.note?`: “${esc(last.note)}”`:''}`;
+      const btns = (st==='pending'&&canApprove(p)) ? `<button class="btn primary sm" onclick="approveCampaign('${p.id}')">✓ Approve</button><button class="btn sm" onclick="requestCampaignChanges('${p.id}')">Request changes</button>`
+                 : (st==='changes'&&isAdminMe()) ? `<button class="btn primary sm" onclick="resubmitCampaign('${p.id}')">Resubmit for approval</button>` : '';
+      const hist=(p._approvals||[]).slice(-4).map(ev=>`${esc(teamName(ev.a))} ${ev.action==='submitted'?'submitted':ev.action==='approved'?'approved':'requested changes'}${ev.w?' · '+esc(ev.w):''}`).join('  →  ');
+      return `<div class="banner ${cls}" style="align-items:flex-start;flex-wrap:wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-top:2px"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
+        <div style="flex:1;min-width:220px"><div>${label}</div>${hist?`<div style="font-size:11.5px;opacity:.75;margin-top:4px">${hist}</div>`:''}</div>
+        <div style="display:flex;gap:8px">${btns}</div>
+      </div>`;
+    })()}
     <div class="tasks-head"><h3>Files</h3><span class="tg-count num">${(p._files||[]).length}</span><button class="btn sm" style="margin-left:auto" onclick="pickFile('${p.id}',null)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>Attach file</button></div>
     <div style="margin-bottom:18px">
       ${(p._files||[]).length ? p._files.map((l,fi)=>`<div class="att" style="cursor:pointer" onclick="openPFile('${p.id}',${fi})"><span class="ai"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span style="flex:1;min-width:0"><div class="al">${esc(l.label)}</div><div class="as">${esc(l.sub||'')}</div></span>${(isAdminMe()||l.by===ME)?`<button class="icon-btn" style="width:28px;height:28px" title="Remove" onclick="event.stopPropagation();delPFile('${p.id}',${fi})"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`:''}</div>`).join('') : '<div class="att-empty">No files yet — attach briefs, creative, or lists for this campaign.</div>'}
@@ -450,6 +492,48 @@ async function addComment(e,id,i){
   else t._comments.push({a:ME,w:'Just now',x:v});
   renderDrawer(id,i);
 }
+
+/* ===================================================================
+   Campaign approvals
+   =================================================================== */
+async function recordApproval(pid, action, note){
+  const p=byId(pid);
+  const ev={action, a:ME, note:note||null, w:'Just now'};
+  if(LIVE && HAS_APPR){
+    const {data,error}=await sb.from('approvals').insert({project_id:pid, actor_id:ME, action, note:note||null}).select().single();
+    if(error){ toast('Approval action failed: '+error.message, true); return false; }
+    ev.id=data.id; ev.w=fmtWhen(data.created_at);
+  }
+  (p._approvals=p._approvals||[]).push(ev);
+  return true;
+}
+async function approveCampaign(pid){
+  const p=byId(pid);
+  if(!canApprove(p)){ toast('Only the designated approver (or an admin) can approve this', true); return; }
+  if(await recordApproval(pid,'approved')){
+    notify(ownerOf(p), `"${p.name}" was approved by ${teamName(ME)}.`, pid, null);
+    toast('Campaign approved'); rerenderApproval(pid);
+  }
+}
+async function requestCampaignChanges(pid){
+  const p=byId(pid);
+  if(!canApprove(p)){ toast('Only the designated approver (or an admin) can do that', true); return; }
+  const note=(prompt('What needs to change before this can be approved?')||'').trim();
+  if(!note) return;
+  if(await recordApproval(pid,'changes',note)){
+    notify(ownerOf(p), `${teamName(ME)} requested changes on "${p.name}": ${note}`, pid, null);
+    toast('Changes requested'); rerenderApproval(pid);
+  }
+}
+async function resubmitCampaign(pid){
+  const p=byId(pid);
+  if(!isAdminMe()){ toast('Admins only', true); return; }
+  if(await recordApproval(pid,'submitted')){
+    notify(p.approverId, `"${p.name}" was resubmitted for your approval.`, pid, null);
+    toast('Resubmitted for approval'); rerenderApproval(pid);
+  }
+}
+function rerenderApproval(pid){ if(isView('project') && currentProject===pid) renderProjectDetail(); else show(currentView); }
 
 /* ===================================================================
    Campaign templates — instantiate / manage / save-as
@@ -693,6 +777,7 @@ function buildCampaignWb(XLSX,p){
     ['Status', STATUS_PILL[projStatus(p)][1]], ['Motion', p.motion||''], ['Segment', p.segment||''],
     ['Solution', p.solution||''], ['Pipeline', p.pipeline||''], ['Audience', p.audience||''],
     ['Est. value', p.value||''], ['Launch', p.launch||''], ['Blocker', p.blocker||''],
+    ['Approval', (function(){ const st=approvalState(p); return st ? `${APPR_PILL[st][1]} — approver: ${teamName(p.approverId)}` : 'Not required'; })()],
     ['Progress', `${pr.done} of ${pr.total} tasks (${pr.pct}%)`], ['Exported', new Date().toLocaleString()]
   ];
   const ws1=XLSX.utils.aoa_to_sheet(meta);
@@ -1075,6 +1160,10 @@ function openCampaignModal(id){
   document.getElementById('cm-title').textContent = p ? 'Edit campaign' : 'New campaign';
   document.getElementById('cm-save').textContent = p ? 'Save changes' : 'Create campaign';
   document.getElementById('cm-owner').innerHTML = Object.keys(TEAM).map(k=>`<option value="${k}">${esc(TEAM[k].name)}</option>`).join('');
+  const eligible = Object.keys(TEAM).filter(k=>TEAM[k].isApprover || TEAM[k].appRole==='admin' || TEAM[k].appRole==null);
+  document.getElementById('cm-approver').innerHTML = `<option value="">None — no approval needed</option>`+eligible.map(k=>`<option value="${k}">${esc(TEAM[k].name)} (${esc(TEAM[k].role||'')})</option>`).join('');
+  document.getElementById('cm-approver').value = p ? (p.approverId||'') : '';
+  document.getElementById('cm-approver').closest('.mfield').style.display = HAS_APPR ? '' : 'none';
   document.getElementById('cm-name').value     = p ? p.name : '';
   document.getElementById('cm-desc').value     = p ? (p.desc||'') : '';
   document.getElementById('cm-owner').value    = p ? (ownerOf(p)||ME) : ME;
@@ -1139,6 +1228,7 @@ function renderTeam(){
       <td>${esc(m.role||'')}</td>
       <td><input class="fsel" style="max-width:240px;width:100%" value="${esc(m.email||'')}" placeholder="not set — needed to sign in" onchange="updateMember('${k}','email',this.value.trim())" /></td>
       <td><select class="fsel" onchange="updateMember('${k}','app_role',this.value)"><option value="user" ${m.appRole!=='admin'?'selected':''}>Base user</option><option value="admin" ${m.appRole==='admin'?'selected':''}>Admin</option></select></td>
+      <td><label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2);cursor:pointer"><input type="checkbox" ${m.isApprover?'checked':''} onchange="updateMember('${k}','is_approver',this.checked)" style="accent-color:var(--accent);width:15px;height:15px" />Can approve</label></td>
       <td class="num" style="font-weight:700">${open}</td>
     </tr>`;
   }).join('');
@@ -1149,8 +1239,9 @@ function renderTeam(){
 async function updateMember(k,field,val){
   if(!isAdminMe()){ toast('Admins only', true); renderTeam(); return; }
   if(field==='app_role' && k===ME && val!=='admin'){ toast("You can't remove your own admin access", true); renderTeam(); return; }
-  TEAM[k][field==='app_role'?'appRole':field] = val || null;
-  if(LIVE) await pUpdate('members', k, {[field]: val || null});
+  const localKey = field==='app_role' ? 'appRole' : field==='is_approver' ? 'isApprover' : field;
+  TEAM[k][localKey] = field==='is_approver' ? !!val : (val || null);
+  if(LIVE) await pUpdate('members', k, {[field]: field==='is_approver' ? !!val : (val || null)});
   renderTeam(); renderMe();
   toast('Member updated');
 }
@@ -1169,6 +1260,7 @@ async function saveUser(e){
   const email=document.getElementById('um-email').value.trim();
   const pw=document.getElementById('um-pw').value;
   const appRole=document.getElementById('um-role').value;
+  const isApprover=document.getElementById('um-approver').value==='yes';
   const title=document.getElementById('um-title').value.trim();
   if(!/^[A-Z]{2,3}$/.test(init)){ toast('Initials must be 2–3 letters', true); return; }
   if(TEAM[init]){ toast(`Initials "${init}" are already taken`, true); return; }
@@ -1179,10 +1271,12 @@ async function saveUser(e){
     const tmp=window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, {auth:{persistSession:false, autoRefreshToken:false, storageKey:'pmpm-invite'}});
     const {error}=await tmp.auth.signUp({email, password:pw});
     if(error && !/already (been )?registered/i.test(error.message)){ toast('Could not create login: '+error.message, true); return; }
-    const d=await pInsert('members', {id:init, name, role:title||null, color, email, app_role:appRole, sort:Object.keys(TEAM).length});
+    const memberRow={id:init, name, role:title||null, color, email, app_role:appRole, sort:Object.keys(TEAM).length};
+    if(HAS_APPR) memberRow.is_approver=isApprover;
+    const d=await pInsert('members', memberRow);
     if(!d) return;
   }
-  TEAM[init]={name, role:title, color, email, appRole};
+  TEAM[init]={name, role:title, color, email, appRole, isApprover};
   fillFilterOptions(); refreshCounts(); renderTeam(); closeModal();
   toast(`${name} added — they can sign in now with the temporary password`);
 }
@@ -1197,13 +1291,31 @@ async function saveCampaign(e){
   };
   if(!fields.name) return;
   const ldInput = document.getElementById('cm-launchdate').value || null;
+  const apprVal = HAS_APPR ? (document.getElementById('cm-approver').value || null) : null;
+  // Approval gate: with an approver designated, a campaign can only be Active
+  // once its latest approval event is 'approved' (the DB trigger enforces this too).
+  if(fields.status==='active' && apprVal){
+    const p0 = editingProject ? byId(editingProject) : null;
+    const approvedNow = p0 && p0.approverId===apprVal && approvalState(p0)==='approved';
+    if(!approvedNow){
+      fields.status='planning';
+      toast('Saved as In Planning — this campaign needs approval before it can go Active');
+    }
+  }
   if(editingProject){
     const p = byId(editingProject);
+    const apprChanged = HAS_APPR && apprVal !== (p.approverId||null);
     if(HAS_LDATE) fields.launch_date = ldInput;
+    if(HAS_APPR) fields.approver_id = apprVal;
     if(LIVE) await pUpdate('projects', p.id, fields);
     Object.assign(p, { name:fields.name, desc:fields.description, owner:fields.owner_id, status:fields.status,
       motion:fields.motion, segment:fields.segment, solution:fields.solution, pipeline:fields.pipeline,
-      value:fields.value, launch:fields.launch, launchDate:ldInput, audience:fields.audience, blocker:fields.blocker });
+      value:fields.value, launch:fields.launch, launchDate:ldInput, audience:fields.audience, blocker:fields.blocker,
+      approverId: HAS_APPR ? apprVal : p.approverId });
+    if(apprChanged && apprVal){
+      await recordApproval(p.id,'submitted');
+      notify(apprVal, `"${p.name}" needs your approval.`, p.id, null);
+    }
     closeModal(); renderBoardPicker(); refreshCounts();
     if(isView('project') && currentProject===p.id) renderProjectDetail(); else show(currentView);
     toast('Campaign updated');
@@ -1215,13 +1327,19 @@ async function saveCampaign(e){
     if(tpl && ldate && !fields.launch) fields.launch = 'Launches '+fmtDue(ldate);
     const launchDate = tpl ? (ldate||ldInput) : ldInput;
     if(HAS_LDATE) fields.launch_date = launchDate;
+    if(HAS_APPR) fields.approver_id = apprVal;
     let id;
     if(LIVE){ const d=await pInsert('projects', {...fields, sort:PROJECTS.length}); if(!d) return; id=d.id; }
     else id='d'+(++demoSeq)+Date.now();
     PROJECTS.push({ id, name:fields.name, desc:fields.description, owner:fields.owner_id, status:fields.status,
       motion:fields.motion, segment:fields.segment, solution:fields.solution, pipeline:fields.pipeline,
-      value:fields.value, launch:fields.launch, launchDate, audience:fields.audience, blocker:fields.blocker, tasks:[], _files:[] });
+      value:fields.value, launch:fields.launch, launchDate, audience:fields.audience, blocker:fields.blocker,
+      approverId: apprVal, _approvals:[], tasks:[], _files:[] });
     closeModal();
+    if(apprVal){
+      await recordApproval(id,'submitted');
+      notify(apprVal, `New campaign "${fields.name}" needs your approval.`, id, null);
+    }
     if(tpl){ toast('Building campaign from template…'); await instantiateTemplate(tpl, id, ldate, roleMap); }
     renderBoardPicker(); refreshCounts(); openProject(id);
     toast(tpl ? `Campaign created from "${tpl.name}" — ${byId(id).tasks.length} tasks added` : 'Campaign created');

@@ -190,7 +190,7 @@
           </div>
           <div class="card"><div style="overflow-x:auto">
             <table>
-              <thead><tr><th></th><th>Name</th><th>Title</th><th>Sign-in email</th><th>Permissions</th><th>Open tasks</th></tr></thead>
+              <thead><tr><th></th><th>Name</th><th>Title</th><th>Sign-in email</th><th>Permissions</th><th>Approver</th><th>Open tasks</th></tr></thead>
               <tbody id="team-body"></tbody>
             </table>
           </div></div>
@@ -227,6 +227,7 @@
       <div class="mfield wide"><label>Description</label><input id="cm-desc" placeholder="One-line summary of the play" /></div>
       <div class="mfield"><label>Owner</label><select id="cm-owner"></select></div>
       <div class="mfield"><label>Status</label><select id="cm-status"><option value="active">Active</option><option value="planning">In Planning</option><option value="review">Under Review</option><option value="complete">Completed</option></select></div>
+      <div class="mfield wide"><label>Approver (optional — campaign can't go Active until they approve)</label><select id="cm-approver"></select></div>
       <div class="mfield"><label>Motion</label><select id="cm-motion"><option value="recruit">Recruit</option><option value="grow">Grow</option><option value="retain">Retain</option></select></div>
       <div class="mfield"><label>Segment</label><input id="cm-segment" placeholder="e.g. Key Accounts · Parts" /></div>
       <div class="mfield"><label>Solution</label><input id="cm-solution" placeholder="e.g. Remi Service" /></div>
@@ -266,6 +267,7 @@
       <div class="mfield wide"><label>Work email * (their sign-in)</label><input id="um-email" type="email" required placeholder="jordan.tate@partssource.com" /></div>
       <div class="mfield"><label>Temporary password * (share it with them)</label><input id="um-pw" required minlength="8" placeholder="min 8 characters" /></div>
       <div class="mfield"><label>Permissions</label><select id="um-role"><option value="user" selected>Base user</option><option value="admin">Admin</option></select></div>
+      <div class="mfield"><label>Campaign approver?</label><select id="um-approver"><option value="no" selected>No</option><option value="yes">Yes — can approve campaigns</option></select></div>
       <div class="mfield wide"><label>Job title</label><input id="um-title" placeholder="e.g. Marketing Manager" /></div>
       <div class="modal-foot" style="grid-column:1 / -1"><button type="button" class="btn" onclick="closeModal()">Cancel</button><button type="submit" class="btn primary">Create user</button></div>
     </form>

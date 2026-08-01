@@ -107,5 +107,17 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   (no TZ). `projects.launch_date` added (db/upgrade-timeline.sql) — set via
   campaign modal or template flow; `HAS_LDATE` feature-detects the column so
   the app works pre-migration. All nav stubs are now done.
+- **Campaign approvals shipped (2026-07-31):** `members.is_approver` (Team screen
+  toggle + Add User field), `projects.approver_id` (campaign modal; null = no
+  approval required — legacy campaigns grandfathered), `approvals` append-only
+  event log ('submitted'|'approved'|'changes' + note). State = last event
+  (`approvalState()`: null/pending/approved/changes). RLS: decisions only by the
+  campaign's approver or admin; submit/resubmit admin-only; actor must be self.
+  DB trigger `trg_enforce_approval` blocks status='active' when approver set and
+  latest event ≠ approved; client mirrors by soft-forcing 'planning' + toast.
+  UI: banner on campaign detail (Approve / Request changes for approver+admin,
+  Resubmit for admin, mini history), chips on cards + dashboard, Excel meta row.
+  Notifications both directions. `HAS_APPR` feature-detects pre-migration.
+  Migration: db/upgrade-approvals.sql. Seed: MH is approver; top5 pending.
 - Possible next (Tier 3): password-reset UI, email digest (needs Edge Function),
   WordPress read-only dashboard.

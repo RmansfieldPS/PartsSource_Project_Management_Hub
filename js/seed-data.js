@@ -8,7 +8,7 @@ window.PMPM_SEED = {
     { id: 'RM', name: 'Ryan M.',     role: 'Lifecycle Manager',     color: '#8A4FC2', email: 'ryan.mansfield@partssource.com', app_role: 'admin' },
     { id: 'MD', name: 'Meredith D.', role: 'Marketing Manager',     color: '#C77A0A', email: null, app_role: 'user' },
     { id: 'NB', name: 'Nora B.',     role: 'Marketing Manager',     color: '#1E9E62', email: null, app_role: 'user' },
-    { id: 'MH', name: 'Mari H.',     role: 'Director of Demand Gen', color: '#D64545', email: null, app_role: 'user' }
+    { id: 'MH', name: 'Mari H.',     role: 'Director of Demand Gen', color: '#D64545', email: null, app_role: 'user', is_approver: true }
   ],
   owner: { depot:'CG', welcome:'RM', crosssell:'MD', proparts:'NB', bedscables:'CG', renewal:'RM', mktplace:'MD', ambulatory:'NB', proservice:'MH', top5:'MD', winback:'NB', rhtp:'MH', 'tn-webinar':'MD', 'blitz-ka':'MH', 'blitz-pro':'CG' },
   projects: [
@@ -67,7 +67,7 @@ window.PMPM_SEED = {
       {t:'Identify target account list', a:'CG', due:'2026-08-05', pr:'high', s:'progress'},
       {t:'Start PRO Service ABM outreach', a:'CG', due:'2026-08-15', pr:'high', s:'blocked', blockedBy:'Target account list — Sales/RevOps'},
       {t:'Exec ROI deck production (video)', a:'MD', due:'2026-08-01', pr:'med', s:'todo'} ]},
-    { id:'top5', name:'Top 5 Biomed & Top 5 Imaging Modality', desc:'Modality-focused campaigns with SDR follow-up & customer stories', segment:'Key Accounts · Parts', motion:'recruit', solution:'Parts', pipeline:'Stage 5', value:'$1.01M', audience:'150 accts >$100K', launch:'Aug 31', status:'planning', blocker:'Audience size & priority direction — Mari H.', tasks:[
+    { id:'top5', name:'Top 5 Biomed & Top 5 Imaging Modality', desc:'Modality-focused campaigns with SDR follow-up & customer stories', segment:'Key Accounts · Parts', motion:'recruit', solution:'Parts', pipeline:'Stage 5', value:'$1.01M', audience:'150 accts >$100K', launch:'Aug 31', status:'planning', blocker:'Audience size & priority direction — Mari H.', approver:'MH', tasks:[
       {t:'Define modality campaign themes', a:'MD', due:'2026-07-20', pr:'med', s:'done'},
       {t:'Build Top 5 Biomed & Imaging assets', a:'MD', due:'2026-08-20', pr:'high', s:'blocked', blockedBy:'Audience size & priority direction — Mari H.'},
       {t:'SDR follow-up + customer stories', a:'NB', due:'2026-08-25', pr:'med', s:'todo'},

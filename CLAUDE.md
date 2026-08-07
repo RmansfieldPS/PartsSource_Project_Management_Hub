@@ -144,5 +144,19 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   admin SQL). Flags: HAS_RECUR/HAS_CEDIT. Migration: db/upgrade-round2.sql.
   **Email digest deliberately skipped** (user choice — revisit later; needs Edge
   Function + provider).
+- **Excel campaign import shipped (2026-08-07):** "Get template" + "Import"
+  buttons at the top of the New Campaign modal (create only, admin only).
+  Template = 3 sheets: Campaign (Field/Value), Tasks (Task|Assignee|Due|
+  Priority|Status|Blocked by|Subtasks|Description), How to use. Parsing in
+  `buildImportModel()`: `resolveMember()` matches initials/email/full name/
+  email local-part/unambiguous first name; `parseImportDate()` accepts real
+  dates OR launch-relative offsets (`L-14`, `L`, `L+30`) resolved against the
+  campaign's Launch date; "Blocked by" = **task number (1 = first task)** or
+  task name → real `blocked_by_task` + 'blocked' status; subtasks split on
+  `;`. Everything is validated into `warn`/`err` and shown in a preview modal
+  (`renderImportPreview`) before anything is written — `err` hides the Create
+  button. Reuses the SheetJS loader from Excel export (no new deps). Intended
+  companion: a Claude skill that turns a campaign brief .docx into this
+  template (not built yet).
 - Possible next (Tier 3): email digest (Edge Function + SendGrid/Resend),
-  task reordering, bulk actions, add-task from board/calendar.
+  brief→Excel Claude skill, task reordering, bulk actions.

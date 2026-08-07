@@ -868,6 +868,327 @@ async function saveAsTemplate(pid){
 }
 
 /* ===================================================================
+   Import a campaign from an Excel brief
+   Sheet "Campaign": Field | Value rows.  Sheet "Tasks": one row per task.
+   Dates accept a real date OR a launch-relative offset (L-14, L, L+7).
+   =================================================================== */
+const IMPORT_TASK_COLS = ['Task','Assignee','Due','Priority','Status','Blocked by','Subtasks','Description'];
+const IMPORT_META_ROWS = [
+  ['Campaign name','' ],['Description',''],['Owner',''],['Approver',''],['Status',''],['Motion',''],
+  ['Segment',''],['Solution',''],['Pipeline',''],['Est. value',''],['Audience',''],['Launch',''],['Launch date',''],['Blocker','']
+];
+const normKey = s => String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+function dateToISO(d){ const pad=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
+/* Returns {iso} or {off} (launch-relative days) or null */
+function parseImportDate(v){
+  if(v==null || v==='') return null;
+  if(v instanceof Date && !isNaN(v)) return {iso:dateToISO(v)};
+  const s=String(v).trim();
+  if(!s) return null;
+  const rel=s.match(/^L\s*([+-]\s*\d+)?$/i);
+  if(rel) return {off: rel[1] ? parseInt(rel[1].replace(/\s/g,''),10) : 0};
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return {iso:s};
+  const d=new Date(s);
+  if(!isNaN(d)) return {iso:dateToISO(d)};
+  return null;
+}
+function resolveMember(v){
+  if(!v) return null;
+  const s=String(v).trim(); if(!s) return null;
+  const n=s.toLowerCase();
+  const bare=x=>String(x||'').toLowerCase().replace(/[^a-z ]/g,'').trim();   // "Baxter O." -> "baxter o"
+  const keys=Object.keys(TEAM);
+  const hit = keys.find(k=>k.toLowerCase()===n)                              // initials
+    || keys.find(k=>(TEAM[k].email||'').toLowerCase()===n)                   // exact email
+    || keys.find(k=>TEAM[k].name.toLowerCase()===n)                          // exact name
+    || keys.find(k=>bare(TEAM[k].name)===bare(n));                           // "Baxter O" ~ "Baxter O."
+  if(hit) return hit;
+  // an email whose local part looks like the person: baxter.o@… -> "baxter o"
+  if(n.includes('@')){
+    const local=bare(n.split('@')[0].replace(/[._-]+/g,' '));
+    const byLocal=keys.find(k=>bare(TEAM[k].name)===local)
+      || keys.find(k=>{ const parts=bare(TEAM[k].name).split(' '); const lp=local.split(' ');
+          return parts[0]===lp[0] && (lp.length===1 || !parts[1] || parts[1][0]===lp[1][0]); });
+    if(byLocal) return byLocal;
+  }
+  // single word = first name, only if unambiguous
+  if(!n.includes(' ')){
+    const first=keys.filter(k=>bare(TEAM[k].name).split(' ')[0]===bare(n));
+    if(first.length===1) return first[0];
+  }
+  return null;
+}
+function normStatus(v){
+  const n=normKey(v);
+  if(!n) return 'todo';
+  if(['done','complete','completed','finished'].includes(n)) return 'done';
+  if(['inprogress','progress','started','doing','wip'].includes(n)) return 'progress';
+  if(['blocked','waiting','onhold'].includes(n)) return 'blocked';
+  if(['inreview','review','reviewing'].includes(n)) return 'review';
+  return 'todo';
+}
+function normPriority(v){
+  const n=normKey(v);
+  if(['high','urgent','p1','critical'].includes(n)) return 'high';
+  if(['low','p3','minor'].includes(n)) return 'low';
+  return 'med';
+}
+function normCampStatus(v){
+  const n=normKey(v);
+  if(['planning','inplanning','planned','draft'].includes(n)) return 'planning';
+  if(['review','underreview','inreview'].includes(n)) return 'review';
+  if(['complete','completed','done','closed'].includes(n)) return 'complete';
+  return 'active';
+}
+function normMotion(v){
+  const n=normKey(v);
+  return ['recruit','grow','retain'].includes(n) ? n : 'recruit';
+}
+
+async function downloadImportTemplate(){
+  try{
+    const XLSX=await loadXLSX();
+    const wb=XLSX.utils.book_new();
+    const meta=[['Field','Value'],...IMPORT_META_ROWS.map(r=>[r[0],r[1]])];
+    // helpful example values
+    const ex={ 'Campaign name':'Enterprise PRO Service — Recruit', 'Description':'Phase 1 demand gen to drive PRO Service awareness',
+      'Owner':'Cole G.', 'Approver':'Mari H.', 'Status':'In Planning', 'Motion':'Recruit', 'Segment':'Enterprise · Services',
+      'Solution':'PRO Service', 'Pipeline':'Stage 4', 'Est. value':'$600K', 'Audience':'C-Suite, HTM leaders; Enterprise >$250K GMV',
+      'Launch':'Early September', 'Launch date':'2026-09-08', 'Blocker':'' };
+    meta.forEach((r,ix)=>{ if(ix) r[1]=ex[r[0]]!==undefined?ex[r[0]]:''; });
+    const ws1=XLSX.utils.aoa_to_sheet(meta); ws1['!cols']=[{wch:16},{wch:62}];
+    XLSX.utils.book_append_sheet(wb, ws1, 'Campaign');
+
+    const rows=[IMPORT_TASK_COLS,
+      ['Build target account list','Cole G.','L-21','High','Not Started','','Pull from Salesforce; Exclude existing PRO customers','Named accounts from Sales/RevOps'],
+      ['Draft ad copy & messaging','Meredith D.','L-14','High','Not Started','','',''],
+      ['Build landing page','Baxter O.','L-7','High','Not Started','2','Design review; QA links & UTMs','Destination for search + display'],
+      ['Launch Google Ads campaign','Cole G.','L','High','Not Started','3','',''],
+      ['Mid-flight performance check','Cole G.','L+14','Medium','Not Started','4','',''],
+      // (Blocked by = task number: 2 = "Draft ad copy", 3 = "Build landing page", 4 = "Launch")
+      ['Wrap report to ELT','Mari H.','L+30','Medium','Not Started','','','']];
+    const ws2=XLSX.utils.aoa_to_sheet(rows);
+    ws2['!cols']=[{wch:38},{wch:15},{wch:11},{wch:10},{wch:13},{wch:11},{wch:44},{wch:44}];
+    XLSX.utils.book_append_sheet(wb, ws2, 'Tasks');
+
+    const help=[
+      ['PMPM campaign import — how to fill this in'],[''],
+      ['1. Fill the Campaign sheet (Field / Value). Only "Campaign name" is required.'],
+      ['2. List every task on the Tasks sheet, one per row, in the order they should appear.'],
+      ['3. Save as .xlsx, then in PMPM click New → Import and pick this file.'],[''],
+      ['DUE DATES — two ways to write them'],
+      ['  A real date',           'e.g. 2026-09-08  (or any date cell)'],
+      ['  Relative to launch',    'L-14 = 14 days before launch · L = launch day · L+30 = 30 days after'],
+      ['  Relative dates need "Launch date" filled in on the Campaign sheet.'],[''],
+      ['ASSIGNEE / OWNER / APPROVER','Full name (Cole G.), initials (CG), or work email. Unknown names are flagged before anything is created.'],[''],
+      ['ALLOWED VALUES'],
+      ['  Task Status','Not Started · In Progress · Blocked · In Review · Complete'],
+      ['  Priority','High · Medium · Low'],
+      ['  Campaign Status','Active · In Planning · Under Review · Complete'],
+      ['  Motion','Recruit · Grow · Retain'],[''],
+      ['BLOCKED BY','Task number this one waits on — 1 = the first task listed, 2 = the second, and so on (you can also write the task name). It becomes a real dependency: when the upstream task is completed, this one unblocks automatically.'],
+      ['SUBTASKS','Separate with semicolons: Design review; QA links; Schedule send'],[''],
+      ['NOTE','A campaign with an Approver starts as In Planning and needs approval before it can be Active.']
+    ];
+    const ws3=XLSX.utils.aoa_to_sheet(help); ws3['!cols']=[{wch:30},{wch:92}];
+    XLSX.utils.book_append_sheet(wb, ws3, 'How to use');
+
+    XLSX.writeFile(wb, 'PMPM campaign import template.xlsx');
+    toast('Template downloaded');
+  }catch(e){ toast('Could not build the template: '+e.message, true); }
+}
+
+let importData=null;
+function pickImportFile(){
+  if(!isAdminMe()){ toast('Only admins can create campaigns', true); return; }
+  const inp=document.getElementById('file-input');
+  inp.accept='.xlsx,.xls,.csv';
+  inp.onchange=()=>{ const f=inp.files[0]; inp.value=''; inp.accept=''; if(f) readImportFile(f); };
+  inp.click();
+}
+async function readImportFile(file){
+  toast('Reading '+file.name+'…');
+  try{
+    const XLSX=await loadXLSX();
+    const buf=await file.arrayBuffer();
+    const wb=XLSX.read(buf,{type:'array', cellDates:true});
+    importData=buildImportModel(XLSX, wb, file.name);
+    renderImportPreview();
+    document.getElementById('campaign-modal').classList.remove('open');
+    document.getElementById('import-modal').classList.add('open');
+    document.getElementById('modal-ov').classList.add('open');
+  }catch(e){ toast('Could not read that file: '+e.message, true); }
+}
+function pickSheet(wb, wanted, fallbackIdx){
+  const name=wb.SheetNames.find(n=>normKey(n)===normKey(wanted));
+  return name ? wb.Sheets[name] : (wb.SheetNames[fallbackIdx] ? wb.Sheets[wb.SheetNames[fallbackIdx]] : null);
+}
+function buildImportModel(XLSX, wb, filename){
+  const warn=[], err=[];
+  // ---- campaign meta ----
+  const metaSheet=pickSheet(wb,'Campaign',0);
+  const meta={};
+  if(metaSheet){
+    XLSX.utils.sheet_to_json(metaSheet,{header:1,blankrows:false}).forEach(r=>{
+      if(!r || r.length<1) return;
+      const k=normKey(r[0]); if(!k || k==='field') return;
+      let v=r[1];
+      if(v instanceof Date && !isNaN(v)) v=dateToISO(v);
+      if(v!=null && String(v).trim()!=='') meta[k]=String(v).trim();
+    });
+  }
+  const g=(...keys)=>{ for(const k of keys){ if(meta[normKey(k)]) return meta[normKey(k)]; } return ''; };
+  const name=g('Campaign name','Campaign','Name','Title');
+  if(!name) err.push('No campaign name found. Put it on the Campaign sheet as "Campaign name".');
+
+  const ownerRaw=g('Owner','Campaign owner'), apprRaw=g('Approver');
+  const owner=ownerRaw?resolveMember(ownerRaw):null;
+  if(ownerRaw && !owner) warn.push(`Owner "${ownerRaw}" isn't on the team — you'll be set as owner instead.`);
+  let approver=apprRaw?resolveMember(apprRaw):null;
+  if(apprRaw && !approver) warn.push(`Approver "${apprRaw}" isn't on the team — no approver will be set.`);
+  if(approver && !(TEAM[approver].isApprover || TEAM[approver].appRole==='admin')){
+    warn.push(`${teamName(approver)} isn't marked as an approver — set that on the Team screen, or the approval won't be actionable.`);
+  }
+  const ld=parseImportDate(g('Launch date','Launchdate','Start date'));
+  const launchISO = ld && ld.iso ? ld.iso : null;
+
+  const camp={
+    name: name||'Untitled campaign',
+    desc: g('Description','Summary','Strategy overview','Objective'),
+    owner: owner||ME,
+    approverId: HAS_APPR?approver:null,
+    status: normCampStatus(g('Status','Campaign status')),
+    motion: normMotion(g('Motion')),
+    segment: g('Segment'), solution: g('Solution','Product'), pipeline: g('Pipeline','Pipeline stage'),
+    value: g('Est. value','Value','Estimated value','Projected lift'),
+    audience: g('Audience','Target audience'),
+    launch: g('Launch','Launch timing','Duration'),
+    launchDate: launchISO,
+    blocker: g('Blocker','Blockers','Dependencies')||null
+  };
+  if(!camp.launch && launchISO) camp.launch='Launches '+fmtDue(launchISO);
+
+  // ---- tasks ----
+  const taskSheet=pickSheet(wb,'Tasks',1);
+  const tasks=[];
+  let needsLaunch=false;
+  if(taskSheet){
+    const rows=XLSX.utils.sheet_to_json(taskSheet,{defval:'',blankrows:false});
+    rows.forEach((r,ix)=>{
+      const find=(...keys)=>{ for(const k of keys){ const hit=Object.keys(r).find(h=>normKey(h)===normKey(k)); if(hit && String(r[hit]).trim()!=='') return r[hit]; } return ''; };
+      const title=String(find('Task','Task name','Title','Name')||'').trim();
+      if(!title) return;
+      const aRaw=String(find('Assignee','Owner','Who')||'').trim();
+      const a=aRaw?resolveMember(aRaw):null;
+      if(aRaw && !a) warn.push(`Row ${ix+2}: assignee "${aRaw}" isn't on the team — assigning to ${teamName(camp.owner)} instead.`);
+      const dRaw=find('Due','Due date','Date');
+      const d=parseImportDate(dRaw);
+      if(dRaw && !d) warn.push(`Row ${ix+2}: couldn't read the due date "${dRaw}" — leaving it blank.`);
+      if(d && d.off!=null) needsLaunch=true;
+      const depRaw=String(find('Blocked by','Depends on','Dependency')||'').trim();
+      let dep=null;
+      if(depRaw){
+        const n=parseInt(depRaw,10);
+        if(!isNaN(n)) dep=n-1;                       // task number (1 = first task) → index
+        if(dep==null || dep<0 || dep>=ix){           // otherwise try matching an earlier task by name
+          const byName=tasks.findIndex(pt=>normKey(pt.t)===normKey(depRaw));
+          dep = byName>-1 ? byName : null;
+        }
+        if(dep==null) warn.push(`Row ${ix+2}: "blocked by ${depRaw}" doesn't point at an earlier task — ignoring it.`);
+      }
+      tasks.push({
+        t:title, aRaw, a, due:d, pr:normPriority(find('Priority','Prio')), s:normStatus(find('Status','State')),
+        dep, sub:String(find('Subtasks','Checklist')||'').split(/[;\n]/).map(x=>x.trim()).filter(Boolean),
+        desc:String(find('Description','Notes','Details')||'').trim()
+      });
+    });
+  }
+  if(!tasks.length) warn.push('No task rows found — the campaign will be created empty. Check that the second sheet is named "Tasks" with a "Task" column.');
+  if(needsLaunch && !launchISO) err.push('Some due dates are launch-relative (like L-14) but the Campaign sheet has no "Launch date".');
+  if(camp.approverId && camp.status==='active'){ camp.status='planning'; warn.push('Campaign has an approver, so it starts In Planning until it\'s approved.'); }
+  return {filename, camp, tasks, warn, err};
+}
+function renderImportPreview(){
+  const d=importData; if(!d) return;
+  const c=d.camp;
+  const dueLabel=t=>!t.due?'—':(t.due.iso?fmtDue(t.due.iso):(c.launchDate?fmtDue(addDaysISO(c.launchDate,t.due.off)):`L${t.due.off>=0?'+':''}${t.due.off}`));
+  const metaCells=[['Campaign',c.name],['Owner',teamName(c.owner)],['Status',STATUS_PILL[c.status==='planning'?'planning':c.status==='review'?'review':c.status==='complete'?'complete':'active'][1]],
+    ['Motion',c.motion],['Segment',c.segment],['Solution',c.solution],['Pipeline',c.pipeline],['Est. value',c.value],
+    ['Audience',c.audience],['Launch',c.launch],['Launch date',c.launchDate?fmtDue(c.launchDate):''],['Approver',c.approverId?teamName(c.approverId):'None']]
+    .filter(x=>x[1]);
+  document.getElementById('im-title').textContent = d.err.length ? 'Import — needs a fix' : 'Review import';
+  document.getElementById('im-confirm').style.display = d.err.length ? 'none' : '';
+  document.getElementById('import-body').innerHTML = `
+    <div class="page-sub" style="margin-bottom:12px">From <b>${esc(d.filename)}</b> — nothing is created until you confirm.</div>
+    ${d.err.map(e=>`<div class="im-warn im-err"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="flex:none;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><span>${esc(e)}</span></div>`).join('')}
+    ${d.warn.length?`<div class="im-warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="flex:none;margin-top:1px"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/></svg><span>${d.warn.map(esc).join('<br>')}</span></div>`:''}
+    ${c.desc?`<div class="page-sub" style="margin-bottom:10px">${esc(c.desc)}</div>`:''}
+    <div class="im-sec">Campaign</div>
+    <div class="im-meta">${metaCells.map(([k,v])=>`<div><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
+    <div class="im-sec">Tasks <span style="color:var(--ink-3)">· ${d.tasks.length}</span></div>
+    <div class="im-tasks">
+      <div class="im-row head"><span>#</span><span>Task</span><span>Assignee</span><span class="c-due">Due</span><span class="c-pr">Priority</span></div>
+      ${d.tasks.map((t,ix)=>`<div class="im-row"><span class="n">${ix+1}</span>
+        <span><div class="tt">${esc(t.t)}</div>${t.dep!=null?`<div class="sub">⛔ waits on #${t.dep+1} ${esc(d.tasks[t.dep]?d.tasks[t.dep].t:'')}</div>`:''}${t.sub.length?`<div class="sub">${t.sub.length} subtask${t.sub.length===1?'':'s'}</div>`:''}</span>
+        <span>${t.a?`${av(t.a)} ${esc(teamName(t.a))}`:`<span style="color:var(--ink-3)">${esc(t.aRaw||'unassigned')}</span>`}</span>
+        <span class="c-due num">${dueLabel(t)}</span><span class="c-pr"><span class="prio ${t.pr}">${t.pr.toUpperCase()}</span></span></div>`).join('')
+        || '<div style="padding:14px;color:var(--ink-3);font-size:12.5px">No tasks in this file.</div>'}
+    </div>`;
+}
+async function confirmImport(){
+  const d=importData; if(!d || d.err.length) return;
+  if(!isAdminMe()){ toast('Only admins can create campaigns', true); return; }
+  const c=d.camp;
+  const btn=document.getElementById('im-confirm'); btn.disabled=true; btn.textContent='Creating…';
+  const fields={ name:c.name, description:c.desc, owner_id:c.owner, status:c.status, motion:c.motion,
+    segment:c.segment, solution:c.solution, pipeline:c.pipeline, value:c.value, audience:c.audience,
+    launch:c.launch, blocker:c.blocker };
+  if(HAS_LDATE) fields.launch_date=c.launchDate;
+  if(HAS_APPR) fields.approver_id=c.approverId;
+  let id;
+  if(LIVE){ const row=await pInsert('projects',{...fields, sort:PROJECTS.length}); if(!row){ btn.disabled=false; btn.textContent='Create campaign'; return; } id=row.id; }
+  else id='d'+(++demoSeq)+Date.now();
+  const proj={ id, name:c.name, desc:c.desc, owner:c.owner, status:c.status, motion:c.motion, segment:c.segment,
+    solution:c.solution, pipeline:c.pipeline, value:c.value, audience:c.audience, launch:c.launch,
+    launchDate:c.launchDate, blocker:c.blocker, approverId:c.approverId, _approvals:[], tasks:[], _files:[] };
+  PROJECTS.push(proj);
+
+  const created=[];
+  for(const [ix,t] of d.tasks.entries()){
+    const due = t.due ? (t.due.iso || (c.launchDate?addDaysISO(c.launchDate,t.due.off):null)) : null;
+    const a = t.a || c.owner;
+    const s = (t.dep!=null && t.s!=='done') ? 'blocked' : t.s;
+    let task;
+    if(LIVE){
+      const row=await pInsert('tasks',{project_id:id, title:t.t, assignee_id:a, due, priority:t.pr, status:s, description:t.desc||null, position:ix});
+      if(!row) break;
+      task={id:row.id, t:t.t, a, due, pr:t.pr, s, _desc:t.desc||null, _sub:[], _comments:[], _links:[]};
+      if(t.sub.length){
+        try{ const {data}=await sb.from('subtasks').insert(t.sub.map((x,si)=>({task_id:row.id,title:x,done:false,position:si}))).select();
+          (data||[]).forEach(r=>task._sub.push({id:r.id, t:r.title, done:false})); }catch(_){}
+      }
+    } else {
+      task={id:'d'+(++demoSeq)+'i'+ix, t:t.t, a, due, pr:t.pr, s, _desc:t.desc||null, _sub:t.sub.map(x=>({t:x,done:false})), _comments:[], _links:[]};
+    }
+    proj.tasks.push(task); created.push(task);
+  }
+  for(const [ix,t] of d.tasks.entries()){
+    if(t.dep!=null && created[t.dep] && created[ix]){
+      created[ix].bt=created[t.dep].id;
+      if(LIVE) await pUpdate('tasks',created[ix].id,{blocked_by_task:created[t.dep].id});
+    }
+  }
+  if(c.approverId){
+    await recordApproval(id,'submitted');
+    notify(c.approverId, `New campaign "${c.name}" needs your approval.`, id, null);
+  }
+  importData=null;
+  btn.disabled=false; btn.textContent='Create campaign';
+  closeModal(); renderBoardPicker(); refreshCounts(); openProject(id);
+  toast(`Imported "${c.name}" — ${created.length} task${created.length===1?'':'s'} created`);
+}
+
+/* ===================================================================
    Files — upload / open / delete (Supabase Storage bucket 'pmpm-files')
    =================================================================== */
 function pickFile(projectId, taskRef){
@@ -1446,8 +1767,9 @@ function openCampaignModal(id){
   document.getElementById('cm-launchdate').value = p ? (p.launchDate||'') : '';
   document.getElementById('cm-audience').value = p ? (p.audience||'') : '';
   document.getElementById('cm-blocker').value  = p ? (p.blocker||'') : '';
-  // template picker: creation only
+  // template picker + Excel import: creation only
   document.getElementById('cm-tpl-wrap').style.display = p ? 'none' : '';
+  document.getElementById('cm-import-wrap').style.display = p ? 'none' : '';
   document.getElementById('cm-template').innerHTML = `<option value="">Blank campaign</option>`+TEMPLATES.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('');
   document.getElementById('cm-template').value = '';
   document.getElementById('cm-ldate').value = '';
@@ -1478,10 +1800,11 @@ function applyTemplateChoice(){
     `<div class="rolemap-row"><span class="rl">${esc(r)}</span><select data-role="${esc(r)}">${Object.keys(TEAM).map(k=>`<option value="${k}" ${k===roleDefault(r)?'selected':''}>${esc(teamName(k))}</option>`).join('')}</select></div>`).join('');
 }
 function closeModal(){
-  editingProject = null; editingTpl = null;
+  editingProject = null; editingTpl = null; importData = null;
   document.getElementById('campaign-modal').classList.remove('open');
   document.getElementById('user-modal').classList.remove('open');
   document.getElementById('tpl-modal').classList.remove('open');
+  document.getElementById('import-modal').classList.remove('open');
   document.getElementById('modal-ov').classList.remove('open');
 }
 

@@ -433,6 +433,23 @@ select.proj-pick { border: 1px solid var(--line-strong); background: var(--surfa
 @media (max-width: 1080px) { .rep-grid { grid-template-columns: 1fr; } }
 .rep svg text { font-family: var(--font); }
 
+/* Import */
+.import-cta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--surface-2); border: 1px dashed var(--line-strong); border-radius: 10px; padding: 12px 14px; }
+.im-sec { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--ink-3); font-weight: 700; margin: 16px 0 8px; }
+.im-meta { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 16px; }
+.im-meta .k { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--ink-3); font-weight: 700; }
+.im-meta .v { font-weight: 620; font-size: 13px; margin-top: 2px; word-break: break-word; }
+.im-tasks { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; max-height: 320px; overflow-y: auto; }
+.im-row { display: grid; grid-template-columns: 26px 1fr 130px 90px 74px; gap: 10px; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.im-row:last-child { border-bottom: none; }
+.im-row.head { background: var(--surface-2); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--ink-3); font-weight: 700; position: sticky; top: 0; }
+.im-row .n { color: var(--ink-3); font-weight: 700; font-variant-numeric: tabular-nums; }
+.im-row .tt { font-weight: 620; }
+.im-row .sub { font-size: 11px; color: var(--ink-3); }
+.im-warn { display: flex; align-items: flex-start; gap: 9px; background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); color: var(--warn); border-radius: 9px; padding: 10px 12px; font-size: 12.5px; font-weight: 550; margin-bottom: 12px; line-height: 1.5; }
+.im-err { background: var(--crit-soft); border-color: color-mix(in srgb, var(--crit) 30%, transparent); color: var(--crit); }
+@media (max-width: 660px) { .im-row { grid-template-columns: 22px 1fr 90px; } .im-row .c-due, .im-row .c-pr { display: none; } }
+
 /* Mentions */
 .mention { color: var(--accent-ink); background: var(--accent-soft); font-weight: 700; border-radius: 4px; padding: 0 3px; }
 

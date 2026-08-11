@@ -77,6 +77,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
           <span><b>Demo mode.</b> Changes aren't saved and you're the only viewer. Add your Supabase keys in <b>js/config.js</b> to make it a live, shared app.</span>
         </div>
+        <div class="banner crit" id="unlinked-banner" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <span><b>Your sign-in isn't linked to a team member yet.</b> You can look around, but you can't be assigned work or make changes until an admin adds <b id="unlinked-email"></b> to your row on the Team screen.</span>
+        </div>
         <div class="banner info" id="seed-banner" style="display:none">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
           <span style="flex:1">This database is empty. Import your <b>real Demand Gen campaigns</b> and team to get started.</span>

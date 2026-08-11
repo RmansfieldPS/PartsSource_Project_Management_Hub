@@ -30,6 +30,8 @@ let editingTpl = null;
 let tlMode = 'portfolio', tlProject = null;
 let HAS_LDATE = true; // projects.launch_date column present (false until upgrade-timeline.sql runs)
 let HAS_APPR = true;  // approvals migration present (false until upgrade-approvals.sql runs)
+let HAS_ROLES = true; // members.app_role present (false until upgrade-roles.sql runs)
+let MY_EMAIL = null;  // signed-in email, for the "account not linked" message
 let HAS_ARCH = true;  // projects.archived column present (false until upgrade-fundamentals.sql runs)
 let HAS_RECUR = true; // tasks.recur column present (false until upgrade-round2.sql runs)
 let HAS_CEDIT = true; // comments.updated_at + edit policy present (false until upgrade-round2.sql runs)
@@ -51,7 +53,12 @@ function projStatus(p){ if(p.status==='complete')return 'complete'; if(p.status=
 function ownerOf(p){ return p.owner || (p.tasks[0] && p.tasks[0].a); }
 /* Roles: 'admin' | 'user'. Missing role (pre-migration DB) = admin, so nothing
    breaks before db/upgrade-roles.sql has been run. */
-function isAdminMe(){ const r = TEAM[ME] && TEAM[ME].appRole; return r === 'admin' || r == null; }
+function isAdminMe(){
+  const m = TEAM[ME];
+  if(!m) return false;              // identity unknown → never assume admin
+  if(!HAS_ROLES) return true;       // pre-migration DB has no roles: everyone edits
+  return m.appRole === 'admin';
+}
 function canEdit(t){ return isAdminMe() || t.a === ME; }
 function denyEdit(){ toast("Only the assignee or an admin can change this task", true); }
 function upstreamOf(p,t){ return t.bt ? p.tasks.find(x=>x.id===t.bt) : null; }
@@ -139,7 +146,8 @@ async function loadLive(){
   ]);
   const firstErr = [mem,prj,tsk,sub,com,att].find(r=>r.error);
   if(firstErr){ toast('Load error: '+firstErr.error.message, true); throw firstErr.error; }
-  HAS_APPR = (mem.data && mem.data.length) ? ('is_approver' in mem.data[0]) : true;
+  HAS_APPR  = (mem.data && mem.data.length) ? ('is_approver' in mem.data[0]) : true;
+  HAS_ROLES = (mem.data && mem.data.length) ? ('app_role' in mem.data[0]) : true;
   TEAM = {}; (mem.data||[]).forEach(m => TEAM[m.id] = {name:m.name, role:m.role, color:m.color, email:m.email, appRole:m.app_role, isApprover:!!m.is_approver});
   HAS_RECUR = (tsk.data && tsk.data.length) ? ('recur' in tsk.data[0]) : true;
   HAS_CEDIT = (com.data && com.data.length) ? ('updated_at' in com.data[0]) : true;
@@ -186,8 +194,18 @@ async function loadLive(){
 /* ===================================================================
    PERSISTENCE (live only)
    =================================================================== */
-async function pUpdate(table,id,fields){ const {error}=await sb.from(table).update(fields).eq('id',id); if(error) toast('Save failed: '+error.message,true); }
-async function pInsert(table,row){ const {data,error}=await sb.from(table).insert(row).select().single(); if(error){ toast('Save failed: '+error.message,true); return null; } return data; }
+function friendlyDbError(error){
+  const msg=String((error && error.message)||'');
+  if(/row-level security|violates row-level/i.test(msg)){
+    if(!ME) return "Your sign-in isn't linked to a team member — ask an admin to add your email on the Team screen.";
+    if(!isAdminMe()) return "You don't have permission for that. Admins manage campaigns; you can edit tasks assigned to you.";
+    return "The database refused that change. If you were just made an admin, sign out and back in to refresh your access.";
+  }
+  if(/needs approval before it can be set to Active/i.test(msg)) return 'This campaign needs approval before it can go Active.';
+  return 'Save failed: '+msg;
+}
+async function pUpdate(table,id,fields){ const {error}=await sb.from(table).update(fields).eq('id',id); if(error) toast(friendlyDbError(error),true); }
+async function pInsert(table,row){ const {data,error}=await sb.from(table).insert(row).select().single(); if(error){ toast(friendlyDbError(error),true); return null; } return data; }
 
 /* ===================================================================
    RENDER — Dashboard
@@ -618,6 +636,7 @@ async function addSub(e,id,i){
 }
 async function addComment(e,id,i){
   e.preventDefault(); const v=document.getElementById('newcomment').value.trim(); if(!v) return;
+  if(!ME){ toast("Your sign-in isn't linked to a team member yet — ask an admin to add your email on the Team screen.", true); return; }
   const t=byId(id).tasks[i];
   if(LIVE){ const d=await pInsert('comments',{task_id:t.id,author_id:ME,body:v}); if(d) t._comments.push({id:d.id,a:d.author_id,w:fmtWhen(d.created_at),x:d.body}); }
   else t._comments.push({a:ME,w:'Just now',x:v});
@@ -1978,7 +1997,7 @@ async function saveCampaign(e){
    Members sidebar / identity
    =================================================================== */
 function renderMe(){
-  const m=TEAM[ME]||{name:'—',role:'',color:'#7688A0'};
+  const m=TEAM[ME]||{name:MY_EMAIL||'Not signed in', role:'Not linked to a team member', color:'#7688A0'};
   document.getElementById('sidebar-foot').innerHTML = `
     <div class="me"><div class="avatar" style="background:${m.color}">${esc(ME||'?')}</div><div style="flex:1"><div class="me-name">${esc(m.name)} ${isAdminMe()?'<span class="tag" style="font-size:9.5px;padding:1px 6px">ADMIN</span>':''}</div><div class="me-role">${esc(m.role)}</div></div>
     ${LIVE?`<button class="icon-btn" title="Sign out" onclick="signOut()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>`:''}</div>
@@ -1995,9 +2014,16 @@ function identify(){
 async function resolveMe(){
   let email=null;
   if(LIVE){ const {data:{user}}=await sb.auth.getUser(); email=user&&user.email; }
+  MY_EMAIL = email;
   const byEmail=Object.keys(TEAM).find(k=>TEAM[k].email && email && TEAM[k].email.toLowerCase()===email.toLowerCase());
-  const saved=localStorage.getItem('pmpm_member');
-  ME = byEmail || (saved && TEAM[saved] ? saved : (TEAM['RM'] ? 'RM' : Object.keys(TEAM)[0]));
+  if(LIVE){
+    // Never fall back to another member: the database identifies people by their
+    // sign-in email, so guessing here would show controls the DB will reject.
+    ME = byEmail || null;
+  } else {
+    const saved=localStorage.getItem('pmpm_member');
+    ME = byEmail || (saved && TEAM[saved] ? saved : (TEAM['RM'] ? 'RM' : Object.keys(TEAM)[0]));
+  }
 }
 
 /* ===================================================================
@@ -2105,6 +2131,10 @@ async function afterLogin(){
   renderMe(); renderBoardPicker(); fillFilterOptions(); refreshCounts(); renderBell(); show('dashboard');
   subscribeRealtime();
   if(!PROJECTS.length) document.getElementById('seed-banner').style.display='flex';
+  if(!ME){
+    document.getElementById('unlinked-email').textContent = MY_EMAIL || 'your email';
+    document.getElementById('unlinked-banner').style.display='flex';
+  }
 }
 async function boot(){
   // wire nav + controls

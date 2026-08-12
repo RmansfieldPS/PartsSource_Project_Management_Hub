@@ -171,5 +171,13 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   button. Reuses the SheetJS loader from Excel export (no new deps). Intended
   companion: a Claude skill that turns a campaign brief .docx into this
   template (not built yet).
+- **Teams digest (2026-08-11, optional):** db/upgrade-teams-digest.sql — pure SQL,
+  no Edge Function. `pg_cron` fires `send_teams_digest()` at 12:00 & 13:00 UTC
+  Mon–Fri; the function keeps only the run that is 8am America/New_York (DST-safe)
+  and `pg_net` POSTs an Adaptive Card to a Teams channel webhook (created via the
+  Teams **Workflows** app — classic O365 connectors are being retired). Webhook URL
+  lives in `app_config` (RLS on, no policies, so app users can't read it). Silent
+  when nothing is due; `select send_teams_digest(true)` forces a test post.
+  Chosen over Power Automate because its HTTP connector is premium-licensed.
 - Possible next (Tier 3): email digest (Edge Function + SendGrid/Resend),
   brief→Excel Claude skill, task reordering, bulk actions.

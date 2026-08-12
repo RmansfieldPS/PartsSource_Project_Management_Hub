@@ -46,6 +46,7 @@ button { font-family: inherit; cursor: pointer; }
 .sidebar { background: var(--surface); border-right: 1px solid var(--line); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 18px 18px 14px; }
 .brand-mark { width: 30px; height: 30px; border-radius: 8px; flex: none; background: linear-gradient(135deg, var(--accent), var(--teal)); display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 14px; box-shadow: var(--shadow); }
+img.brand-mark { background: none; display: block; object-fit: contain; }
 .brand-name { font-weight: 700; letter-spacing: -.2px; font-size: 15px; line-height: 1.1; }
 .brand-sub { font-size: 11px; color: var(--ink-3); letter-spacing: .3px; }
 .nav { padding: 6px 10px; display: flex; flex-direction: column; gap: 2px; }

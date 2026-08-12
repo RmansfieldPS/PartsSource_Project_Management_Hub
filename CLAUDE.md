@@ -1,12 +1,20 @@
-# CLAUDE.md — PMPM
+# CLAUDE.md — Always On
 
 Context for Claude Code sessions working on this project.
 
 ## What this is
-**PMPM (PartsSource Marketing Project Management)** — an internal, Asana-style tool for
+**Always On** (internal name PMPM in code identifiers) — an Asana-style tool for
 the PartsSource Demand Gen team. Dashboard, campaigns, per-campaign tasks with
 assignment, task detail (subtasks / attachments / activity), Kanban board, My Tasks,
 and Roadblocks. Built on the team's real campaign data.
+
+## Branding (renamed 2026-08-11)
+User-facing product name is **Always On** (was PMPM); tagline "PartsSource Demand Gen".
+App icon is `img/logo.svg` (blue rounded square + white PS), used for the sidebar mark,
+login card and favicon — swap that one file to change the logo everywhere. Internal
+identifiers deliberately still say pmpm (`window.PMPM_CONFIG`, `PMPM_SEED`, storage
+bucket `pmpm-files`, localStorage `pmpm_member`) — renaming the bucket would orphan
+every uploaded file.
 
 ## Architecture (important)
 - **Buildless static site.** No Node, no bundler, no framework. Plain HTML/CSS/JS.
@@ -77,7 +85,12 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   others' tasks). Admins edit everything + Team screen (edit emails/roles, Add User
   = throwaway supabase client signUp + members insert; admin session untouched).
   Base users edit only own tasks; UI gates via `isAdminMe()`/`canEdit(t)` but RLS is
-  the real boundary. Client treats missing app_role as admin (pre-migration compat).
+  the real boundary. **Identity is strict in live mode (fixed 2026-08-11):**
+  `resolveMe()` returns null when the sign-in email matches no members row — it must
+  never fall back to another member (it used to default to 'RM', so unlinked users saw
+  admin UI the DB then rejected). `isAdminMe()` returns false for unknown identity and
+  only treats a missing app_role as admin when `HAS_ROLES` is false. Unlinked users get
+  a banner naming their email; `friendlyDbError()` translates RLS rejections.
   Members with no email mapped can't edit anything in live mode — set emails in Team.
 - **Files + Excel export shipped (2026-07-31):** attachments now task-level
   (task_id) OR campaign-level (project_id) with `path` (Storage) vs `url`

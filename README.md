@@ -1,4 +1,4 @@
-# PMPM — PartsSource Marketing Project Management
+# Always On — PartsSource Demand Gen
 
 An internal, Asana-style project-management tool for the PartsSource Demand Gen team.
 Dashboard, campaigns, per-campaign tasks with assignment, task detail (subtasks,

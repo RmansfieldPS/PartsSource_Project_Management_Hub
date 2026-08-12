@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PMPM — PartsSource Marketing Project Management</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230A6CBF'/%3E%3Ctext x='50' y='68' font-size='52' font-family='Segoe UI,Arial' font-weight='bold' fill='white' text-anchor='middle'%3EPS%3C/text%3E%3C/svg%3E" />
+  <title>Always On — PartsSource Demand Gen</title>
+  <link rel="icon" type="image/svg+xml" href="img/logo.svg" />
+  <link rel="apple-touch-icon" href="img/logo.svg" />
   <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
@@ -12,7 +13,7 @@
   <!-- ===== Login (live mode only) ===== -->
   <div class="auth-overlay" id="auth-overlay">
     <div class="auth-card">
-      <div class="auth-brand"><div class="brand-mark">PS</div><div><div class="brand-name">PMPM</div><div class="brand-sub">Demand Gen PM</div></div></div>
+      <div class="auth-brand"><img class="brand-mark" src="img/logo.svg" alt="PartsSource" /><div><div class="brand-name">Always On</div><div class="brand-sub">PartsSource Demand Gen</div></div></div>
       <h2 id="auth-title">Sign in</h2>
       <div class="sub">PartsSource Marketing project management</div>
       <form id="signin-form" onsubmit="authSubmit(event)">
@@ -38,8 +39,8 @@
   <div class="app" id="app-root">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">PS</div>
-        <div><div class="brand-name">PMPM</div><div class="brand-sub">Demand Gen PM</div></div>
+        <img class="brand-mark" src="img/logo.svg" alt="PartsSource" />
+        <div><div class="brand-name">Always On</div><div class="brand-sub">PartsSource Demand Gen</div></div>
       </div>
       <nav class="nav" id="nav">
         <button class="nav-item active" data-view="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>Dashboard</button>
@@ -197,7 +198,7 @@
         <!-- REPORTS -->
         <section class="view" id="view-reports">
           <div class="rep-grid" id="reports-body"></div>
-          <div class="page-sub" style="margin-top:12px">Completion trends count from when the team started using PMPM — imported historical tasks have no completion dates.</div>
+          <div class="page-sub" style="margin-top:12px">Completion trends count from when the team started using Always On — imported historical tasks have no completion dates.</div>
         </section>
 
         <!-- TEAM (admins only) -->

@@ -1,4 +1,4 @@
-/* PMPM — PartsSource Marketing Project Management
+/* Always On — PartsSource Demand Gen project management
    Buildless app. Runs in DEMO mode until Supabase keys are set in js/config.js,
    then becomes a live, shared, multi-user app (auth + database + realtime). */
 
@@ -991,10 +991,10 @@ async function downloadImportTemplate(){
     XLSX.utils.book_append_sheet(wb, ws2, 'Tasks');
 
     const help=[
-      ['PMPM campaign import — how to fill this in'],[''],
+      ['Always On campaign import — how to fill this in'],[''],
       ['1. Fill the Campaign sheet (Field / Value). Only "Campaign name" is required.'],
       ['2. List every task on the Tasks sheet, one per row, in the order they should appear.'],
-      ['3. Save as .xlsx, then in PMPM click New → Import and pick this file.'],[''],
+      ['3. Save as .xlsx, then in Always On click New → Import and pick this file.'],[''],
       ['DUE DATES — two ways to write them'],
       ['  A real date',           'e.g. 2026-09-08  (or any date cell)'],
       ['  Relative to launch',    'L-14 = 14 days before launch · L = launch day · L+30 = 30 days after'],
@@ -1012,7 +1012,7 @@ async function downloadImportTemplate(){
     const ws3=XLSX.utils.aoa_to_sheet(help); ws3['!cols']=[{wch:30},{wch:92}];
     XLSX.utils.book_append_sheet(wb, ws3, 'How to use');
 
-    XLSX.writeFile(wb, 'PMPM campaign import template.xlsx');
+    XLSX.writeFile(wb, 'Always On campaign import template.xlsx');
     toast('Template downloaded');
   }catch(e){ toast('Could not build the template: '+e.message, true); }
 }
@@ -1313,7 +1313,7 @@ async function exportCampaign(id){
   toast('Preparing Excel export…');
   try{
     const XLSX=await loadXLSX();
-    XLSX.writeFile(buildCampaignWb(XLSX,p), `PMPM - ${p.name.replace(/[\\/:*?"<>|]/g,'-')}.xlsx`);
+    XLSX.writeFile(buildCampaignWb(XLSX,p), `Always On - ${p.name.replace(/[\\/:*?"<>|]/g,'-')}.xlsx`);
     toast('Excel downloaded');
   }catch(e){ toast('Export failed: '+e.message, true); }
 }

@@ -1,4 +1,4 @@
-/* PMPM configuration.
+/* Always On configuration.
  *
  * The app runs in DEMO MODE out of the box (no saving, no login) so you can
  * click around immediately. To make it a live, shared, multi-user app:

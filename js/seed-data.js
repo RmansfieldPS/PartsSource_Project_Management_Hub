@@ -1,4 +1,4 @@
-/* PMPM seed data — the real PartsSource Demand Gen campaigns + team.
+/* Always On seed data — the real PartsSource Demand Gen campaigns + team.
    Used to run the app in demo mode, and to import into Supabase the first time.
    Source: "UPDATED Demand Gen Campaign Priorities May 2026.xlsx". */
 window.PMPM_SEED = {

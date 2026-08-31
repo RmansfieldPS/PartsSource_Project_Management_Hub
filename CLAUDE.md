@@ -132,6 +132,11 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   Resubmit for admin, mini history), chips on cards + dashboard, Excel meta row.
   Notifications both directions. `HAS_APPR` feature-detects pre-migration.
   Migration: db/upgrade-approvals.sql. Seed: MH is approver; top5 pending.
+- **Task ordering (2026-08-11):** the campaign screen and the Excel export both
+  list tasks via `tasksByDue(p)` — soonest due first, undated last, ties keep
+  insertion order. It returns `[{t,i}]` where `i` is the index into `p.tasks`;
+  every click handler is index-based, so callers MUST use that `i` and never the
+  position in the sorted array. Stored `position` is untouched (display-only sort).
 - **Fundamentals shipped (2026-07-31):** task editing (due/priority inline in
   drawer via `setTaskField`; title/description via `drawerEdit` mode + pencil);
   delete task (assignee/admin, clears dependents' `bt`, removes storage files),

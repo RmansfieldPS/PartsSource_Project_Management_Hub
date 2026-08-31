@@ -49,6 +49,18 @@ function fmtWhen(ts){ if(!ts) return ''; const d=new Date(ts); return MONTHS[d.g
 function teamName(code){ return (TEAM[code]&&TEAM[code].name) || 'Unassigned'; }
 function av(code,cls){ const m=TEAM[code]; if(!m) return `<span class="av-sm ${cls||''}" style="background:var(--ink-3)" title="Unassigned">–</span>`; return `<span class="av-sm ${cls||''}" style="background:${m.color}" title="${esc(m.name)} · ${esc(m.role)}">${esc(code)}</span>`; }
 function progress(p){ const total=p.tasks.length, done=p.tasks.filter(t=>t.s==='done').length; return {done,total,pct: total?Math.round(done/total*100):0}; }
+/* Campaign task order: soonest due date first, undated tasks last (ties and
+   undated keep their original order). Returns [{t,i}] — i is the index into
+   p.tasks, which every click handler needs, so callers must use it, not the
+   position in the sorted array. */
+function tasksByDue(p){
+  return p.tasks.map((t,i)=>({t,i})).sort((a,b)=>{
+    if(a.t.due && b.t.due) return a.t.due < b.t.due ? -1 : a.t.due > b.t.due ? 1 : a.i-b.i;
+    if(a.t.due) return -1;
+    if(b.t.due) return 1;
+    return a.i-b.i;
+  });
+}
 function projStatus(p){ if(p.status==='complete')return 'complete'; if(p.status==='planning')return 'planning'; if(p.status==='review')return 'review'; return p.tasks.some(t=>t.s==='blocked')?'atrisk':'active'; }
 function ownerOf(p){ return p.owner || (p.tasks[0] && p.tasks[0].a); }
 /* Roles: 'admin' | 'user'. Missing role (pre-migration DB) = admin, so nothing
@@ -284,7 +296,7 @@ function openProject(id){ currentProject=id; renderProjectDetail(); show('projec
 function renderProjectDetail(){
   const p=byId(currentProject); if(!p) return;
   const pr=progress(p), stKey=projStatus(p), st=STATUS_PILL[stKey], owner=ownerOf(p);
-  const rows = p.tasks.map((t,i)=>{
+  const rows = tasksByDue(p).map(({t,i})=>{
     const editable=canEdit(t);
     return `
     <div class="trow ${t.s==='done'?'done':''}">
@@ -1298,7 +1310,7 @@ function buildCampaignWb(XLSX,p){
   const ws1=XLSX.utils.aoa_to_sheet(meta);
   ws1['!cols']=[{wch:14},{wch:80}];
   XLSX.utils.book_append_sheet(wb, ws1, 'Campaign');
-  const rows=p.tasks.map(t=>{ ensureDetail(p,t); return {
+  const rows=tasksByDue(p).map(({t})=>{ ensureDetail(p,t); return {
     'Task':t.t, 'Assignee':teamName(t.a), 'Due':t.due||'', 'Priority':(t.pr||'').toUpperCase(),
     'Status':STATUS[t.s].label, 'Waiting on':blockedLabel(p,t)||'', 'Blocks':t.blocks||'',
     'Subtasks':`${t._sub.filter(s=>s.done).length}/${t._sub.length}`, 'Description':t._desc||''

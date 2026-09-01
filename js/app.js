@@ -99,6 +99,10 @@ function parseValue(v){
   return parseFloat(m[1]) * (m[2].toUpperCase()==='M' ? 1e6 : 1e3);
 }
 function isView(v){ return document.getElementById('view-'+v).classList.contains('active'); }
+/* Where auth emails (confirmation, password reset) should send people back to.
+   Supabase falls back to its Site URL setting when this isn't supplied, which
+   defaults to localhost — so always pass it explicitly. */
+function appUrl(){ return location.origin + location.pathname; }
 let toastTimer=null, toastFn=null;
 function toast(msg,bad){ showToast(msg,{bad:!!bad}); }
 function showToast(msg,opts){
@@ -1928,7 +1932,7 @@ async function saveUser(e){
   if(LIVE){
     // Create their login via a throwaway client so the admin's session is untouched.
     const tmp=window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, {auth:{persistSession:false, autoRefreshToken:false, storageKey:'pmpm-invite'}});
-    const {error}=await tmp.auth.signUp({email, password:pw});
+    const {error}=await tmp.auth.signUp({email, password:pw, options:{emailRedirectTo:appUrl()}});
     if(error && !/already (been )?registered/i.test(error.message)){ toast('Could not create login: '+error.message, true); return; }
     const memberRow={id:init, name, role:title||null, color, email, app_role:appRole, sort:Object.keys(TEAM).length};
     if(HAS_APPR) memberRow.is_approver=isApprover;
@@ -2049,7 +2053,11 @@ async function authSubmit(e){
   e.preventDefault();
   const email=document.getElementById('auth-email').value.trim(), pw=document.getElementById('auth-pw').value;
   const errEl=document.getElementById('auth-err'); errEl.textContent='';
-  const fn = authMode==='in' ? sb.auth.signInWithPassword({email,password:pw}) : sb.auth.signUp({email,password:pw});
+  // emailRedirectTo keeps confirmation links pointing at wherever the app is
+  // actually running, instead of Supabase's default Site URL (localhost).
+  const fn = authMode==='in'
+    ? sb.auth.signInWithPassword({email,password:pw})
+    : sb.auth.signUp({email,password:pw,options:{emailRedirectTo:appUrl()}});
   const {error}=await fn;
   if(error){ errEl.textContent=error.message; return; }
   if(authMode==='up'){ errEl.style.color='var(--good)'; errEl.textContent='Account created. If email confirmation is on, confirm then sign in.'; }
@@ -2062,7 +2070,7 @@ async function forgotPassword(){
   const email=document.getElementById('auth-email').value.trim();
   const errEl=document.getElementById('auth-err');
   if(!email){ errEl.style.color=''; errEl.textContent='Type your work email above first, then click Forgot password.'; return; }
-  const {error}=await sb.auth.resetPasswordForEmail(email, {redirectTo: location.origin+location.pathname});
+  const {error}=await sb.auth.resetPasswordForEmail(email, {redirectTo: appUrl()});
   errEl.style.color = error ? '' : 'var(--good)';
   errEl.textContent = error ? error.message : 'Reset link sent — check your email (may take a minute).';
 }

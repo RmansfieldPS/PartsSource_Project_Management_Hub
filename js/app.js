@@ -11,7 +11,12 @@ const sb = LIVE ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_AN
 /* ---------- Constants ---------- */
 const STATUS = { todo:{label:'Not Started',dot:'var(--ink-3)'}, progress:{label:'In Progress',dot:'var(--accent)'}, blocked:{label:'Blocked',dot:'var(--crit)'}, review:{label:'In Review',dot:'var(--warn)'}, done:{label:'Complete',dot:'var(--good)'} };
 const ORDER = ['todo','progress','blocked','review','done'];
-const STATUS_PILL = { active:['info','On track'], atrisk:['crit','At risk'], planning:['idle','In planning'], review:['warn','Under review'], complete:['good','Completed'] };
+const STATUS_PILL = { active:['info','On track'], atrisk:['crit','At risk'], blocked:['crit','Blocked'], planning:['idle','In planning'], review:['warn','Under review'], complete:['good','Completed'] };
+/* Campaign statuses that count as in-flight. 'blocked' is deliberately live:
+   a stuck campaign should stay visible on the dashboard and the Active tab,
+   not disappear into a filter nobody looks at. */
+const LIVE_STATUSES = ['active','blocked'];
+const isLive = p => LIVE_STATUSES.includes(p.status);
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const TODAY = (function(){ const d = LIVE ? new Date() : new Date('2026-07-31T00:00:00'); d.setHours(0,0,0,0); return d; })();
 
@@ -61,7 +66,13 @@ function tasksByDue(p){
     return a.i-b.i;
   });
 }
-function projStatus(p){ if(p.status==='complete')return 'complete'; if(p.status==='planning')return 'planning'; if(p.status==='review')return 'review'; return p.tasks.some(t=>t.s==='blocked')?'atrisk':'active'; }
+function projStatus(p){
+  if(p.status==='complete') return 'complete';
+  if(p.status==='planning')  return 'planning';
+  if(p.status==='review')    return 'review';
+  if(p.status==='blocked')   return 'blocked';   // set by hand — outranks the derived flag
+  return p.tasks.some(t=>t.s==='blocked') ? 'atrisk' : 'active';
+}
 function ownerOf(p){ return p.owner || (p.tasks[0] && p.tasks[0].a); }
 /* Roles: 'admin' | 'user'. Missing role (pre-migration DB) = admin, so nothing
    breaks before db/upgrade-roles.sql has been run. */
@@ -228,7 +239,7 @@ async function pInsert(table,row){ const {data,error}=await sb.from(table).inser
    =================================================================== */
 function renderDashboard(){
   const vis = visibleProjects();
-  const active = vis.filter(p=>p.status==='active');
+  const active = vis.filter(isLive);
   document.getElementById('kpi-active').textContent = active.length;
   document.getElementById('kpi-active-foot').textContent = `of ${vis.length} total campaigns`;
   document.getElementById('kpi-rb').textContent = vis.flatMap(p=>p.tasks).filter(t=>t.s==='blocked').length;
@@ -277,7 +288,7 @@ function renderProjects(filter){
   segSel.value = segs.includes(FILT.proj.segment) ? FILT.proj.segment : (FILT.proj.segment='', '');
   ['proj-fm','proj-fo','proj-fs'].forEach((id,ix)=>document.getElementById(id).classList.toggle('on',!!Object.values(FILT.proj)[ix]));
   const list = (filter==='archived' ? PROJECTS.filter(p=>p.archived)
-      : visibleProjects().filter(p=> filter==='all'?true : filter==='active'?p.status==='active' : filter==='planning'?(p.status==='planning'||p.status==='review') : p.status==='complete'))
+      : visibleProjects().filter(p=> filter==='all'?true : filter==='active'? isLive(p) : filter==='planning'?(p.status==='planning'||p.status==='review') : p.status==='complete'))
     .filter(p=>!FILT.proj.motion || p.motion===FILT.proj.motion)
     .filter(p=>!FILT.proj.owner || ownerOf(p)===FILT.proj.owner)
     .filter(p=>!FILT.proj.segment || p.segment===FILT.proj.segment);
@@ -286,9 +297,9 @@ function renderProjects(filter){
     return `<div class="pcard t-${stKey}" onclick="openProject('${p.id}')">
       <div class="ph"><div style="flex:1"><div class="pn">${esc(p.name)}</div><div class="pd">${esc(p.desc)}</div></div><span class="pill ${st[0]}">${st[1]}</span></div>
       <div class="ptags"><span class="motion ${p.motion}">${esc(p.motion)}</span><span class="tag">${esc(p.segment)}</span>${apprChip(p)}</div>
-      <div class="bar"><span style="width:${pr.pct}%${stKey==='atrisk'?';background:linear-gradient(90deg,var(--warn),var(--crit))':''}"></span></div>
+      <div class="bar"><span style="width:${pr.pct}%${(stKey==='atrisk'||stKey==='blocked')?';background:linear-gradient(90deg,var(--warn),var(--crit))':''}"></span></div>
       <div class="prow"><span>${pr.done} of ${pr.total} tasks</span><span class="pct num">${pr.pct}%</span></div>
-      <div class="prow"><span class="chip-person">${av(ownerOf(p))}${esc(teamName(ownerOf(p)))}</span><span class="num" style="${stKey==='atrisk'?'color:var(--crit)':''}">${esc((p.launch||'').split('·')[0].trim())}</span></div>
+      <div class="prow"><span class="chip-person">${av(ownerOf(p))}${esc(teamName(ownerOf(p)))}</span><span class="num" style="${(stKey==='atrisk'||stKey==='blocked')?'color:var(--crit)':''}">${esc((p.launch||'').split('·')[0].trim())}</span></div>
     </div>`;
   }).join('') || `<div style="color:var(--ink-3)">No campaigns in this view.</div>`;
 }
@@ -972,6 +983,7 @@ function normCampStatus(v){
   const n=normKey(v);
   if(['planning','inplanning','planned','draft'].includes(n)) return 'planning';
   if(['review','underreview','inreview'].includes(n)) return 'review';
+  if(['blocked','onhold','hold','stuck'].includes(n)) return 'blocked';
   if(['complete','completed','done','closed'].includes(n)) return 'complete';
   return 'active';
 }
@@ -1147,7 +1159,7 @@ function renderImportPreview(){
   const d=importData; if(!d) return;
   const c=d.camp;
   const dueLabel=t=>!t.due?'—':(t.due.iso?fmtDue(t.due.iso):(c.launchDate?fmtDue(addDaysISO(c.launchDate,t.due.off)):`L${t.due.off>=0?'+':''}${t.due.off}`));
-  const metaCells=[['Campaign',c.name],['Owner',teamName(c.owner)],['Status',STATUS_PILL[c.status==='planning'?'planning':c.status==='review'?'review':c.status==='complete'?'complete':'active'][1]],
+  const metaCells=[['Campaign',c.name],['Owner',teamName(c.owner)],['Status',(STATUS_PILL[c.status]||STATUS_PILL.active)[1]],
     ['Motion',c.motion],['Segment',c.segment],['Solution',c.solution],['Pipeline',c.pipeline],['Est. value',c.value],
     ['Audience',c.audience],['Launch',c.launch],['Launch date',c.launchDate?fmtDue(c.launchDate):''],['Approver',c.approverId?teamName(c.approverId):'None']]
     .filter(x=>x[1]);
@@ -1503,7 +1515,7 @@ function renderTimeline(){
   const vis=visibleProjects();
   pick.innerHTML = vis.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
   const cur=byId(tlProject);
-  if(!cur || cur.archived) tlProject=(vis.find(p=>p.status==='active')||vis[0]||{}).id||null;
+  if(!cur || cur.archived) tlProject=(vis.find(isLive)||vis[0]||{}).id||null;
   if(tlProject) pick.value=tlProject;
   document.getElementById('tl-fo').classList.toggle('on',!!FILT.tl.owner);
   document.getElementById('tl-fm').classList.toggle('on',!!FILT.tl.motion);
@@ -1527,7 +1539,7 @@ function renderTlPortfolio(inner){
   rows.sort((a,b)=>a.min<b.min?-1:1);
   const R=tlRange(allDates); inner._range=R;
   const trackW=R.days*TL_PPD;
-  const colorFor={active:'var(--accent)', atrisk:'var(--crit)', planning:'var(--ink-3)', review:'var(--warn)', complete:'var(--good)'};
+  const colorFor={active:'var(--accent)', atrisk:'var(--crit)', blocked:'var(--crit)', planning:'var(--ink-3)', review:'var(--warn)', complete:'var(--good)'};
   inner.style.width=(TL_LABELW+trackW)+'px';
   inner.innerHTML=`
     <div class="tl-row tl-headrow"><div class="tl-label" style="font-size:10.5px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.5px">Campaign</div><div class="tl-track" style="width:${trackW}px">${tlMonths(R)}</div></div>
@@ -1643,8 +1655,8 @@ function renderReports(){
   // 3+4. campaign progress + status donut
   const prog=vis.filter(p=>p.status!=='complete').map(p=>({p,pr:progress(p)})).sort((a,b)=>b.pr.pct-a.pr.pct);
   const stCounts={}; vis.forEach(p=>stCounts[p.status]=(stCounts[p.status]||0)+1);
-  const donutColors={active:'var(--accent)',planning:'var(--ink-3)',review:'var(--warn)',complete:'var(--good)'};
-  const stLabel={active:'Active',planning:'In planning',review:'Under review',complete:'Completed'};
+  const donutColors={active:'var(--accent)',blocked:'var(--crit)',planning:'var(--ink-3)',review:'var(--warn)',complete:'var(--good)'};
+  const stLabel={active:'Active',blocked:'Blocked',planning:'In planning',review:'Under review',complete:'Completed'};
   const totalC=vis.length||1, C=2*Math.PI*40; let acc=0;
   const donutSegs=Object.keys(donutColors).filter(k=>stCounts[k]).map(k=>{ const frac=stCounts[k]/totalC;
     const seg=`<circle r="40" cx="60" cy="60" fill="none" stroke="${donutColors[k]}" stroke-width="15" stroke-dasharray="${(frac*C).toFixed(2)} ${C.toFixed(2)}" stroke-dashoffset="${(-acc*C).toFixed(2)}" transform="rotate(-90 60 60)"><title>${stLabel[k]}: ${stCounts[k]}</title></circle>`;
@@ -1661,7 +1673,7 @@ function renderReports(){
 
   // 6. pipeline by motion
   const pipe={recruit:0,grow:0,retain:0};
-  vis.filter(p=>p.status==='active').forEach(p=>{ if(pipe[p.motion]!=null) pipe[p.motion]+=parseValue(p.value); });
+  vis.filter(isLive).forEach(p=>{ if(pipe[p.motion]!=null) pipe[p.motion]+=parseValue(p.value); });
   const pipeSum=Object.values(pipe).reduce((a,b)=>a+b,0), pipeMax=Math.max(...Object.values(pipe),1);
   const motionColor={recruit:'var(--recruit)',grow:'var(--grow)',retain:'var(--retain)'};
 

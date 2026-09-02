@@ -30,7 +30,7 @@ create table if not exists projects (
   audience    text,
   launch      text,          -- display label, e.g. 'Q2 · Phase 1 live'
   launch_date date,          -- real date; timeline flag + template due-date anchor
-  status      text not null default 'active' check (status in ('active','planning','review','complete')),
+  status      text not null default 'active' check (status in ('active','planning','review','complete','blocked')),
   owner_id    text references members(id),
   blocker     text,
   approver_id text references members(id),  -- null = no approval required

@@ -188,6 +188,7 @@ tbody tr.clickable:hover { background: var(--surface-2); cursor: pointer; }
 .pcard { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 17px; box-shadow: var(--shadow); border-top: 3px solid var(--accent); cursor: pointer; transition: transform .12s, border-color .12s; }
 .pcard:hover { transform: translateY(-2px); border-color: var(--line-strong); }
 .pcard.t-atrisk { border-top-color: var(--crit); }
+.pcard.t-blocked { border-top-color: var(--crit); }
 .pcard.t-planning { border-top-color: var(--ink-3); }
 .pcard.t-review { border-top-color: var(--warn); }
 .pcard.t-complete { border-top-color: var(--good); }

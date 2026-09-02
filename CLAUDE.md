@@ -132,6 +132,14 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   Resubmit for admin, mini history), chips on cards + dashboard, Excel meta row.
   Notifications both directions. `HAS_APPR` feature-detects pre-migration.
   Migration: db/upgrade-approvals.sql. Seed: MH is approver; top5 pending.
+- **Campaign status 'blocked' (2026-08-11):** fifth campaign status alongside
+  active/planning/review/complete (db/upgrade-blocked-status.sql widens the
+  projects_status_check constraint). It is a LIVE status — `LIVE_STATUSES` /
+  `isLive(p)` drive the dashboard Active KPI + table, the Campaigns "Active" tab,
+  the Reports pipeline sum and the Timeline default, so a blocked campaign stays
+  visible instead of falling out of every tab. `projStatus()` returns 'blocked'
+  ahead of the derived 'atrisk' (which still means "has blocked tasks"). Both
+  render red. Excel import maps blocked/on hold/stuck via `normCampStatus()`.
 - **Task ordering (2026-08-11):** the campaign screen and the Excel export both
   list tasks via `tasksByDue(p)` — soonest due first, undated last, ties keep
   insertion order. It returns `[{t,i}]` where `i` is the index into `p.tasks`;

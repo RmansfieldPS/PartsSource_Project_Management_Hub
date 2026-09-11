@@ -235,7 +235,7 @@ tbody tr.clickable:hover { background: var(--surface-2); cursor: pointer; }
 .addtask-form input, .addtask-form select { border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); border-radius: 8px; padding: 7px 9px; font-size: 13px; font-family: inherit; }
 @media (max-width: 860px) { .trow, .thead-row { grid-template-columns: 22px 1fr 120px; } .trow .col-due, .trow .col-prio, .thead-row .col-due, .thead-row .col-prio { display: none; } .addtask-form { grid-template-columns: 1fr; } }
 
-.amenu { position: fixed; z-index: 100; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: 0 10px 30px rgba(16,32,46,.22); padding: 6px; min-width: 200px; display: none; }
+.amenu { position: fixed; z-index: 100; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: 0 10px 30px rgba(16,32,46,.22); padding: 6px; min-width: 200px; display: none; max-height: 60vh; overflow-y: auto; }
 .amenu.open { display: block; }
 .amenu .ah { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--ink-3); font-weight: 700; padding: 6px 8px 4px; }
 .amenu button { display: flex; align-items: center; gap: 9px; width: 100%; border: none; background: none; padding: 7px 8px; border-radius: 7px; text-align: left; font-size: 13px; color: var(--ink); }

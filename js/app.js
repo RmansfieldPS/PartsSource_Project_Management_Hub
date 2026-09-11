@@ -537,10 +537,22 @@ function openAssign(e,id,i){
   e.stopPropagation();
   if(!canEdit(byId(id).tasks[i])){ denyEdit(); return; }
   const r=e.currentTarget.getBoundingClientRect();
-  amenu.innerHTML = `<div class="ah">Assign to</div>`+Object.keys(TEAM).map(k=>`<button onclick="assign('${id}',${i},'${k}')">${av(k)}<span>${esc(TEAM[k].name)}</span><span class="r">${esc(TEAM[k].role.split(' ')[0])}</span></button>`).join('');
-  amenu.style.left=Math.min(r.left,window.innerWidth-220)+'px';
-  amenu.style.top=(r.bottom+6)+'px';
+  // Job title is optional on the Team screen, so never assume it's set —
+  // reading .role of null here used to throw and stop the menu from opening.
+  amenu.innerHTML = `<div class="ah">Assign to</div>`+Object.keys(TEAM).map(k=>{
+    const short=String(TEAM[k].role||'').split(' ')[0];
+    return `<button onclick="assign('${id}',${i},'${k}')">${av(k)}<span>${esc(TEAM[k].name)}</span>${short?`<span class="r">${esc(short)}</span>`:''}</button>`;
+  }).join('');
+  // Measure while hidden so a long team list can flip above the chip instead
+  // of opening off the bottom of the window.
+  amenu.style.visibility='hidden';
   amenu.classList.add('open');
+  const h=amenu.offsetHeight;
+  let top=r.bottom+6;
+  if(top+h > window.innerHeight-8) top=Math.max(8, r.top-h-6);
+  amenu.style.top=top+'px';
+  amenu.style.left=Math.max(8, Math.min(r.left, window.innerWidth-amenu.offsetWidth-8))+'px';
+  amenu.style.visibility='';
 }
 function assign(id,i,who){
   const t=byId(id).tasks[i], was=t.a;

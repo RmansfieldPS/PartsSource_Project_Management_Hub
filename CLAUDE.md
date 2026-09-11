@@ -140,6 +140,15 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   visible instead of falling out of every tab. `projStatus()` returns 'blocked'
   ahead of the derived 'atrisk' (which still means "has blocked tasks"). Both
   render red. Excel import maps blocked/on hold/stuck via `normCampStatus()`.
+- **Reassignment fix (2026-09-11):** `openAssign()` built each menu entry with
+  `TEAM[k].role.split(' ')` — but job title is OPTIONAL on the Team screen / Add
+  User, so one member with a null title threw a TypeError before
+  `amenu.classList.add('open')` and silently broke reassignment for everyone,
+  admins included. Always guard optional member fields (`role` can be null/''),
+  and note `av()` was already safe because `esc()` handles null. The popover now
+  also measures itself while hidden and flips above the chip when it would run
+  past the bottom of the window (it is `position:fixed`), with `max-height:60vh`
+  so a growing team list stays reachable.
 - **Task ordering (2026-08-11):** the campaign screen and the Excel export both
   list tasks via `tasksByDue(p)` — soonest due first, undated last, ties keep
   insertion order. It returns `[{t,i}]` where `i` is the index into `p.tasks`;

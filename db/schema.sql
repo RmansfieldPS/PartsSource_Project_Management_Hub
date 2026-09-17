@@ -35,6 +35,13 @@ create table if not exists projects (
   blocker     text,
   approver_id text references members(id),  -- null = no approval required
   archived    boolean default false,         -- hidden from lists; history kept
+  kind        text not null default 'campaign' check (kind in ('campaign','technical')),
+  platform    text,                          -- technical: Marketo, WordPress, Salesforce...
+  work_type   text,                          -- technical: Integration, Migration, Build...
+  requested_by text,
+  priority    text check (priority is null or priority in ('high','med','low')),
+  target_date date,
+  unblocks    jsonb default '[]'::jsonb,     -- campaign ids this technical project unblocks
   sort        int default 0,
   created_at  timestamptz default now()
 );
@@ -62,8 +69,18 @@ create table if not exists tasks (
   description     text,
   completed_at    timestamptz,
   recur           text check (recur is null or recur in ('weekly','biweekly','monthly')),
+  milestone_id    uuid references milestones(id) on delete set null,
   position        int default 0,
   created_at      timestamptz default now()
+);
+
+create table if not exists milestones (
+  id         uuid primary key default gen_random_uuid(),
+  project_id text references projects(id) on delete cascade,
+  name       text not null,
+  due        date,
+  position   int default 0,
+  created_at timestamptz default now()
 );
 
 create table if not exists subtasks (
@@ -127,6 +144,7 @@ alter table comments      enable row level security;
 alter table attachments   enable row level security;
 alter table notifications enable row level security;
 alter table templates     enable row level security;
+alter table milestones    enable row level security;
 alter table approvals     enable row level security;
 -- (upgrade-roles.sql / upgrade-files.sql / upgrade-templates.sql /
 --  upgrade-approvals.sql create the helper functions and per-table policies.)

@@ -140,6 +140,27 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   visible instead of falling out of every tab. `projStatus()` returns 'blocked'
   ahead of the derived 'atrisk' (which still means "has blocked tasks"). Both
   render red. Excel import maps blocked/on hold/stuck via `normCampStatus()`.
+- **Technical Projects + Milestones (2026-09-17):** a second *kind* of project
+  sharing the same task engine, NOT a parallel silo. `projects.kind`
+  ('campaign'|'technical') plus technical-only columns (platform, work_type,
+  requested_by, priority, target_date, `unblocks` jsonb) and a `milestones`
+  table; `tasks.milestone_id` groups tasks into phases
+  (db/upgrade-technical-projects.sql; `HAS_TECH` feature-detects).
+  **Project-set discipline — the thing to get right:** `visibleCampaigns()` for
+  campaign-only screens (Campaigns grid, Dashboard, campaign charts in Reports),
+  `visibleTech()` for the Tech screen, `typedProjects()` for shared views that
+  honour the Campaign/Technical toggle (`FILT.type`; My Tasks, Board picker,
+  Calendar, Timeline, Roadblocks), plain `visibleProjects()` only where all work
+  belongs (Search, bell, person-centric Reports charts). Adding a view? Pick one
+  deliberately or technical work silently pollutes campaign metrics.
+  Milestone status is **always derived** (`milestoneState()`), never stored.
+  `renderProjectDetail()` serves both kinds and branches via `metaStripHtml()` /
+  `tasksSectionHtml()`; `taskRowHtml()` is shared. Cross-links: a technical
+  project lists the campaigns it `unblocks`, surfaced by `projectLinkNoteHtml()`
+  on both detail pages and as a "Campaigns waiting on technical work" card at
+  the top of Roadblocks. Admin-only to create/manage (same as campaigns).
+  Seeded from the real rebrand registers (Website + Marketo), Phase -> Milestone,
+  go-live 2026-11-16.
 - **Reassignment fix (2026-09-11):** `openAssign()` built each menu entry with
   `TEAM[k].role.split(' ')` — but job title is OPTIONAL on the Team screen / Add
   User, so one member with a null title threw a TypeError before

@@ -29,14 +29,17 @@ let ME = null;        // current member code
 let NOTIFS = [];      // in-app notifications (all members; filtered to ME on render)
 let demoSeq = 0;
 let currentProject = null, currentTask = null, currentFilter = 'active', currentView = 'dashboard';
-let FILT = { board:{a:'',pr:''}, proj:{motion:'',owner:'',segment:''}, cal:{a:'',proj:''}, tl:{owner:'',motion:'',a:''} };
+let FILT = { board:{a:'',pr:''}, proj:{motion:'',owner:'',segment:''}, cal:{a:'',proj:''}, tl:{owner:'',motion:'',a:''},
+             tech:{owner:'',platform:''}, type:'all' };   // type = all | campaign | technical (shared views)
 let TEMPLATES = [];   // campaign templates library
 let editingTpl = null;
 let tlMode = 'portfolio', tlProject = null;
 let HAS_LDATE = true; // projects.launch_date column present (false until upgrade-timeline.sql runs)
 let HAS_APPR = true;  // approvals migration present (false until upgrade-approvals.sql runs)
 let HAS_ROLES = true; // members.app_role present (false until upgrade-roles.sql runs)
+let HAS_TECH = true;  // projects.kind + milestones present (false until upgrade-technical-projects.sql runs)
 let MY_EMAIL = null;  // signed-in email, for the "account not linked" message
+let editingTech = null;   // technical project id being edited, null = creating
 let HAS_ARCH = true;  // projects.archived column present (false until upgrade-fundamentals.sql runs)
 let HAS_RECUR = true; // tasks.recur column present (false until upgrade-round2.sql runs)
 let HAS_CEDIT = true; // comments.updated_at + edit policy present (false until upgrade-round2.sql runs)
@@ -47,7 +50,32 @@ let calY = TODAY.getFullYear(), calM = TODAY.getMonth();
 
 /* ---------- Helpers ---------- */
 const byId = id => PROJECTS.find(p => p.id === id);
-const visibleProjects = () => PROJECTS.filter(p => !p.archived);
+/* Technical projects live in the same PROJECTS array as campaigns, separated by
+   `kind`. Campaign-specific screens must use visibleCampaigns(); person-centric
+   screens (My Tasks, Calendar, Roadblocks, Search) use visibleProjects() so a
+   person sees all of their work in one place. */
+const visibleProjects  = () => PROJECTS.filter(p => !p.archived);
+const isTech           = p => p && p.kind === 'technical';
+const visibleCampaigns = () => PROJECTS.filter(p => !p.archived && !isTech(p));
+const visibleTech      = () => PROJECTS.filter(p => !p.archived && isTech(p));
+/* Shared-view Campaign / Technical toggle */
+const matchesType = p => FILT.type==='all' || (FILT.type==='technical' ? isTech(p) : !isTech(p));
+const typedProjects = () => visibleProjects().filter(matchesType);
+/* Milestones: status is derived from their tasks, never stored. */
+function msTasks(p, msId){ return p.tasks.filter(t => (t.msId||null) === (msId||null)); }
+function milestoneState(p, ms){
+  const ts = msTasks(p, ms.id);
+  const done = ts.filter(t=>t.s==='done').length;
+  const state = !ts.length ? 'empty'
+    : done===ts.length ? 'complete'
+    : ts.some(t=>t.s==='blocked') ? 'blocked'
+    : ts.some(t=>t.s!=='todo') ? 'progress' : 'todo';
+  const overdue = ms.due && state!=='complete' && ms.due < todayISO();
+  return { done, total: ts.length, pct: ts.length?Math.round(done/ts.length*100):0, state, overdue };
+}
+const MS_PILL = { complete:['good','Complete'], blocked:['crit','Blocked'], progress:['info','In progress'], todo:['idle','Not started'], empty:['idle','No tasks'] };
+/* Technical projects that list this campaign in their `unblocks` */
+function techBlocking(campaignId){ return visibleTech().filter(t => (t.unblocks||[]).includes(campaignId)); }
 function esc(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function fmtDue(iso){ if(!iso) return 'TBD'; const d=new Date(iso+'T00:00:00'); return MONTHS[d.getMonth()]+' '+d.getDate(); }
 function fmtWhen(ts){ if(!ts) return ''; const d=new Date(ts); return MONTHS[d.getMonth()]+' '+d.getDate(); }
@@ -155,10 +183,18 @@ function buildFromSeed(){
   TEAM = {}; S.members.forEach(m => TEAM[m.id] = {name:m.name, role:m.role, color:m.color, email:m.email, appRole:m.app_role, isApprover:!!m.is_approver});
   OWNER = S.owner; DETAIL = S.detail;
   let n = 0;
-  PROJECTS = S.projects.map(p => ({ ...p, owner:S.owner[p.id], _files:[],
+  const techs = (S.techProjects||[]).map(p => {
+    const mss = (p.milestones||[]).map((m,mi)=>({ id:'ms-'+p.id+'-'+mi, name:m.name, due:m.due, pos:mi }));
+    return { ...p, kind:'technical', _files:[], _approvals:[], milestones:mss,
+      tasks: p.tasks.map(t => ({ ...t, id:'d'+(++n),
+        msId: (t.ms!=null && mss[t.ms]) ? mss[t.ms].id : null,
+        completedAt: t.s==='done' && t.due ? t.due+'T12:00:00.000Z' : null })) };
+  });
+  PROJECTS = S.projects.map(p => ({ ...p, kind:'campaign', milestones:[], unblocks:[], owner:S.owner[p.id], _files:[],
     approverId:p.approver||null,
     _approvals: p.approver ? [{action:'submitted', a:S.owner[p.id]||'RM', note:null, w:'Jul 30'}] : [],
-    tasks: p.tasks.map(t => ({...t, id:'d'+(++n), completedAt: t.s==='done' && t.due ? t.due+'T12:00:00.000Z' : null})) }));
+    tasks: p.tasks.map(t => ({...t, id:'d'+(++n), completedAt: t.s==='done' && t.due ? t.due+'T12:00:00.000Z' : null})) }))
+    .concat(techs);
   TEMPLATES = JSON.parse(JSON.stringify(S.templates||[])).map(t=>({...t, description:t.description||'', defaults:t.defaults||{}}));
 }
 
@@ -189,7 +225,7 @@ async function loadLive(){
   const tBy={};
   (tsk.data||[]).forEach(t => (tBy[t.project_id]=tBy[t.project_id]||[]).push({
     id:t.id, t:t.title, a:t.assignee_id, due:t.due, pr:t.priority, s:t.status, blockedBy:t.blocked_by, blocks:t.blocks,
-    bt:t.blocked_by_task||null, completedAt:t.completed_at||null, recur:t.recur||null,
+    bt:t.blocked_by_task||null, completedAt:t.completed_at||null, recur:t.recur||null, msId:t.milestone_id||null,
     _desc:t.description||null, _sub:subBy[t.id]||[], _comments:comBy[t.id]||[], _links:attBy[t.id]||[]
   }));
   // notifications table may not exist until db/upgrade-tier1.sql has run — tolerate that
@@ -204,6 +240,13 @@ async function loadLive(){
   } catch(_) { TEMPLATES = []; }
   HAS_LDATE = (prj.data && prj.data.length) ? ('launch_date' in prj.data[0]) : true;
   HAS_ARCH  = (prj.data && prj.data.length) ? ('archived' in prj.data[0]) : true;
+  HAS_TECH  = (prj.data && prj.data.length) ? ('kind' in prj.data[0]) : true;
+  // milestones table may not exist until db/upgrade-technical-projects.sql has run
+  const msBy={};
+  try {
+    const mr = await sb.from('milestones').select('*').order('position');
+    if(!mr.error) (mr.data||[]).forEach(m => (msBy[m.project_id]=msBy[m.project_id]||[]).push({id:m.id, name:m.name, due:m.due, pos:m.position}));
+  } catch(_) { HAS_TECH = false; }
   // approvals table may not exist until db/upgrade-approvals.sql has run — tolerate that
   let aprBy={};
   try {
@@ -214,7 +257,10 @@ async function loadLive(){
     id:p.id, name:p.name, desc:p.description, segment:p.segment, motion:p.motion, solution:p.solution,
     pipeline:p.pipeline, value:p.value, audience:p.audience, launch:p.launch, launchDate:p.launch_date||null, status:p.status,
     blocker:p.blocker, owner:p.owner_id, approverId:p.approver_id||null, _approvals:aprBy[p.id]||[],
-    archived:!!p.archived, tasks:tBy[p.id]||[], _files:pfBy[p.id]||[]
+    archived:!!p.archived, tasks:tBy[p.id]||[], _files:pfBy[p.id]||[],
+    kind:p.kind||'campaign', platform:p.platform||'', workType:p.work_type||'', requestedBy:p.requested_by||'',
+    priority:p.priority||'med', targetDate:p.target_date||null,
+    unblocks:Array.isArray(p.unblocks)?p.unblocks:[], milestones:(msBy[p.id]||[])
   }));
 }
 
@@ -238,7 +284,7 @@ async function pInsert(table,row){ const {data,error}=await sb.from(table).inser
    RENDER — Dashboard
    =================================================================== */
 function renderDashboard(){
-  const vis = visibleProjects();
+  const vis = visibleCampaigns();
   const active = vis.filter(isLive);
   document.getElementById('kpi-active').textContent = active.length;
   document.getElementById('kpi-active-foot').textContent = `of ${vis.length} total campaigns`;
@@ -287,8 +333,8 @@ function renderProjects(filter){
   segSel.innerHTML = `<option value="">All segments</option>`+segs.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
   segSel.value = segs.includes(FILT.proj.segment) ? FILT.proj.segment : (FILT.proj.segment='', '');
   ['proj-fm','proj-fo','proj-fs'].forEach((id,ix)=>document.getElementById(id).classList.toggle('on',!!Object.values(FILT.proj)[ix]));
-  const list = (filter==='archived' ? PROJECTS.filter(p=>p.archived)
-      : visibleProjects().filter(p=> filter==='all'?true : filter==='active'? isLive(p) : filter==='planning'?(p.status==='planning'||p.status==='review') : p.status==='complete'))
+  const list = (filter==='archived' ? PROJECTS.filter(p=>p.archived && !isTech(p))
+      : visibleCampaigns().filter(p=> filter==='all'?true : filter==='active'? isLive(p) : filter==='planning'?(p.status==='planning'||p.status==='review') : p.status==='complete'))
     .filter(p=>!FILT.proj.motion || p.motion===FILT.proj.motion)
     .filter(p=>!FILT.proj.owner || ownerOf(p)===FILT.proj.owner)
     .filter(p=>!FILT.proj.segment || p.segment===FILT.proj.segment);
@@ -308,12 +354,31 @@ function renderProjects(filter){
    RENDER — Campaign detail
    =================================================================== */
 function openProject(id){ currentProject=id; renderProjectDetail(); show('project'); }
-function renderProjectDetail(){
-  const p=byId(currentProject); if(!p) return;
-  const pr=progress(p), stKey=projStatus(p), st=STATUS_PILL[stKey], owner=ownerOf(p);
-  const rows = tasksByDue(p).map(({t,i})=>{
-    const editable=canEdit(t);
-    return `
+/* Cross-links between technical projects and the campaigns they unblock. */
+function techSummary(t){
+  const pr=progress(t);
+  const next=(t.milestones||[]).slice().sort((a,b)=>(a.pos||0)-(b.pos||0))
+    .map(m=>({m,st:milestoneState(t,m)})).find(x=>x.st.state!=='complete');
+  return { pr, next };
+}
+function projectLinkNoteHtml(p){
+  if(isTech(p)){
+    const cs=(p.unblocks||[]).map(id=>byId(id)).filter(Boolean);
+    if(!cs.length) return '';
+    return `<div class="unblocks-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+      <span><b>Unblocks ${cs.length} campaign${cs.length===1?'':'s'}:</b> ${cs.map(c=>`<a href="#" onclick="event.preventDefault();openProject('${c.id}')" style="color:inherit;font-weight:700">${esc(c.name)}</a>`).join(' · ')}</span></div>`;
+  }
+  const ts=techBlocking(p.id);
+  if(!ts.length) return '';
+  return `<div class="unblocks-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>
+    <span><b>Waiting on technical work:</b> ${ts.map(t=>{const {pr,next}=techSummary(t);
+      return `<a href="#" onclick="event.preventDefault();openProject('${t.id}')" style="color:inherit;font-weight:700">${esc(t.name)}</a> — ${pr.pct}% done${next?`, next up ${esc(next.m.name)}${next.m.due?` (${next.st.overdue?'overdue ':''}${fmtDue(next.m.due)})`:''}`:''}`;
+    }).join('<br>')}</span></div>`;
+}
+/* ---------- Shared task row (campaigns and technical projects) ---------- */
+function taskRowHtml(p,t,i){
+  const editable=canEdit(t);
+  return `
     <div class="trow ${t.s==='done'?'done':''}">
       <button class="check" style="${t.s==='done'?'background:var(--good);border-color:var(--good)':''}${editable?'':';cursor:default;opacity:.55'}" onclick="cycleDone('${p.id}',${i})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="opacity:${t.s==='done'?1:0}"><path d="M20 6L9 17l-5-5"/></svg></button>
       <div><div class="trow-title" style="cursor:pointer" onclick="openTask('${p.id}',${i})">${esc(t.t)}${t.recur?' <span title="Repeats — completing creates the next occurrence">🔁</span>':''}</div>${(t.bt||t.blockedBy)?`<div class="trow-sub">⛔ Waiting on: ${esc(blockedLabel(p,t))}</div>`:t.blocks?`<div class="trow-sub" style="color:var(--warn)">↗ Blocks ${esc(t.blocks)}</div>`:''}</div>
@@ -321,21 +386,104 @@ function renderProjectDetail(){
       <div class="col-due num t-due ${t.due&&new Date(t.due+'T00:00:00')<TODAY&&t.s!=='done'?'over':''}" style="font-size:12.5px;color:var(--ink-2)">${fmtDue(t.due)}</div>
       <div class="col-prio"><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></div>
       <div><select class="status-sel" ${editable?'':'disabled'} onchange="setStatus('${p.id}',${i},this.value)">${ORDER.map(s=>`<option value="${s}" ${t.s===s?'selected':''}>${STATUS[s].label}</option>`).join('')}</select></div>
-    </div>`;}).join('');
+    </div>`;
+}
+const T_HEAD = `<div class="thead-row"><span></span><span>Task</span><span>Assignee</span><span class="col-due">Due</span><span class="col-prio">Priority</span><span>Status</span></div>`;
+function addTaskFormHtml(p){
+  const msSel = isTech(p) && (p.milestones||[]).length
+    ? `<select id="nt-ms">${(p.milestones||[]).map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}<option value="">No milestone</option></select>` : '';
+  return `<div class="addtask-row">
+        <form class="addtask-form" id="addtask-form" onsubmit="addTask(event)">
+          <input id="nt-title" placeholder="New task name…" required />
+          <select id="nt-assignee">${(isAdminMe()?Object.keys(TEAM):[ME]).map(k=>`<option value="${k}">${esc(teamName(k))}</option>`).join('')}</select>
+          ${msSel}
+          <input id="nt-due" type="date" />
+          <select id="nt-prio"><option value="high">High</option><option value="med" selected>Medium</option><option value="low">Low</option></select>
+          <button class="btn primary sm" type="submit">Add</button>
+        </form>
+      </div>`;
+}
+/* ---------- Meta strip: campaign fields vs technical fields ---------- */
+function metaStripHtml(p){
+  const cells = isTech(p)
+    ? [['System',p.platform],['Type',p.workType],['Requested by',p.requestedBy],
+       ['Priority',(p.priority||'med').toUpperCase()],['Target',p.targetDate?fmtDue(p.targetDate):''],
+       ['Milestones',(p.milestones||[]).length]]
+    : [['Segment',p.segment],['Solution',p.solution],['Pipeline',p.pipeline],['Audience',p.audience],
+       ['Motion',p.motion],['Est. Value',p.value],['Launch',p.launch]];
+  return `<div class="metastrip">${cells.map(([l,v])=>
+    l==='Motion' ? `<div class="meta-item"><div class="ml">Motion</div><div class="mv"><span class="motion ${p.motion}">${esc(p.motion)}</span></div></div>`
+    : `<div class="meta-item"><div class="ml">${esc(l)}</div><div class="mv"${l==='Est. Value'?' style="color:var(--good)"':''}>${esc(v)||'—'}</div></div>`
+  ).join('')}</div>`;
+}
+/* ---------- Tasks: flat for campaigns, grouped by milestone for technical ---------- */
+function tasksSectionHtml(p, pr){
+  const footer = `<div class="page-sub" style="margin-top:12px">${isAdminMe()?'As an admin you can edit and reassign any task — click an assignee chip to hand it to a teammate.':'You can update tasks assigned to you; admins manage everything else.'}</div>`;
+  if(!isTech(p)){
+    const rows = tasksByDue(p).map(({t,i})=>taskRowHtml(p,t,i)).join('');
+    return `<div class="tasks-head"><h3>Tasks</h3><span class="prog-inline"><div class="bar" style="width:120px"><span style="width:${pr.pct}%"></span></div><span class="num" style="font-size:12.5px;color:var(--ink-3)">${pr.done}/${pr.total} done</span></span><button class="btn primary sm" style="margin-left:auto" onclick="toggleAddTask()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add task</button></div>
+    <div class="ttable">${T_HEAD}
+      ${rows || '<div style="padding:16px;color:var(--ink-3);font-size:13px">No tasks yet — add the first one.</div>'}
+      ${addTaskFormHtml(p)}
+    </div>${footer}`;
+  }
+  // technical: one group per milestone, then anything not yet assigned to one
+  const idx = new Map(p.tasks.map((t,i)=>[t.id,i]));
+  const groupFor = list => list.length
+    ? `<div class="ttable">${T_HEAD}${list.map(t=>taskRowHtml(p,t,idx.get(t.id))).join('')}</div>`
+    : `<div class="ms-empty">No tasks in this milestone yet.</div>`;
+  const byDue = list => list.slice().sort((a,b)=>{
+    if(a.due&&b.due) return a.due<b.due?-1:a.due>b.due?1:0;
+    if(a.due) return -1; if(b.due) return 1; return 0; });
+
+  const groups = (p.milestones||[]).slice().sort((a,b)=>(a.pos||0)-(b.pos||0)).map(m=>{
+    const st = milestoneState(p,m), pill = MS_PILL[st.state];
+    return `<div class="ms-group">
+      <div class="ms-head">
+        <span class="ms-name">${esc(m.name)}</span>
+        <span class="pill ${st.overdue?'crit':pill[0]}">${st.overdue?'Overdue':pill[1]}</span>
+        ${m.due?`<span class="ms-due ${st.overdue?'over':''}">${fmtDue(m.due)}</span>`:''}
+        <div class="ms-bar"><span style="width:${st.pct}%"></span></div>
+        <span class="ms-count">${st.done}/${st.total}</span>
+        ${isAdminMe()?`<div class="ms-actions"><button class="icon-btn" style="width:28px;height:28px" title="Edit milestone" onclick="editMilestone('${p.id}','${m.id}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4z"/></svg></button><button class="icon-btn" style="width:28px;height:28px" title="Delete milestone" onclick="deleteMilestone('${p.id}','${m.id}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>`:''}
+      </div>
+      ${groupFor(byDue(msTasks(p,m.id)))}
+    </div>`;
+  }).join('');
+
+  const loose = byDue(msTasks(p,null));
+  const looseGroup = loose.length ? `<div class="ms-group">
+      <div class="ms-head"><span class="ms-name" style="color:var(--ink-3)">Not in a milestone</span><span class="ms-count">${loose.length}</span></div>
+      ${groupFor(loose)}
+    </div>` : '';
+
+  return `<div class="tasks-head"><h3>Milestones</h3><span class="prog-inline"><div class="bar" style="width:120px"><span style="width:${pr.pct}%"></span></div><span class="num" style="font-size:12.5px;color:var(--ink-3)">${pr.done}/${pr.total} done</span></span>
+      <div style="margin-left:auto;display:flex;gap:8px">${isAdminMe()?`<button class="btn sm" onclick="addMilestone('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" width="13" height="13"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add milestone</button>`:''}<button class="btn primary sm" onclick="toggleAddTask()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" width="13" height="13"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add task</button></div></div>
+    ${groups || '<div class="att-empty" style="margin-bottom:14px">No milestones yet — add one to start grouping this project into phases.</div>'}
+    ${looseGroup}
+    <div class="ttable">${addTaskFormHtml(p)}</div>${footer}`;
+}
+
+function renderProjectDetail(){
+  const p=byId(currentProject); if(!p) return;
+  // the detail screen serves both kinds — label the chrome for whichever this is
+  const back=document.getElementById('pd-back');
+  if(back){
+    back.lastChild.textContent = isTech(p) ? 'All technical projects' : 'All campaigns';
+    back.setAttribute('onclick', isTech(p) ? "show('tech')" : "show('projects')");
+  }
+  const pr=progress(p), stKey=projStatus(p), st=STATUS_PILL[stKey], owner=ownerOf(p);
+  const rows = tasksByDue(p).map(({t,i})=>taskRowHtml(p,t,i)).join('');
 
   document.getElementById('project-detail').innerHTML = `
     <div class="pd-head">
-      <div style="flex:1"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="pd-title">${esc(p.name)}</span><span class="pill ${st[0]}">${st[1]}</span>${isAdminMe()?`<button class="btn sm" onclick="openCampaignModal('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4z"/></svg>Edit</button>`:''}<button class="btn sm" onclick="exportCampaign('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export</button>${isAdminMe()?`<button class="btn sm" onclick="saveAsTemplate('${p.id}')" title="Turn this campaign's task list into a reusable template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Save as template</button><button class="btn sm" onclick="archiveCampaign('${p.id}',${p.archived?'false':'true'})" title="${p.archived?'Restore to active lists':'Hide from lists — nothing is deleted'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>${p.archived?'Unarchive':'Archive'}</button>`:''}</div><div class="pd-desc">${esc(p.desc)}</div></div>
+      <div style="flex:1"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="pd-title">${esc(p.name)}</span><span class="pill ${st[0]}">${st[1]}</span>${isAdminMe()?`<button class="btn sm" onclick="${isTech(p)?`openTechModal('${p.id}')`:`openCampaignModal('${p.id}')`}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4z"/></svg>Edit</button>`:''}<button class="btn sm" onclick="exportCampaign('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export</button>${isAdminMe()&&!isTech(p)?`<button class="btn sm" onclick="saveAsTemplate('${p.id}')" title="Turn this campaign's task list into a reusable template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Save as template</button><button class="btn sm" onclick="archiveCampaign('${p.id}',${p.archived?'false':'true'})" title="${p.archived?'Restore to active lists':'Hide from lists — nothing is deleted'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>${p.archived?'Unarchive':'Archive'}</button>`:''}</div><div class="pd-desc">${esc(p.desc)}</div></div>
       <div class="pd-owner"><div class="lbl">Owner</div><span class="chip-person" style="font-size:13.5px">${av(owner)}${esc(teamName(owner))}</span></div>
     </div>
-    <div class="metastrip">
-      ${[['Segment',p.segment],['Solution',p.solution],['Pipeline',p.pipeline],['Audience',p.audience]].map(([l,v])=>`<div class="meta-item"><div class="ml">${l}</div><div class="mv">${esc(v)||'—'}</div></div>`).join('')}
-      <div class="meta-item"><div class="ml">Motion</div><div class="mv"><span class="motion ${p.motion}">${esc(p.motion)}</span></div></div>
-      <div class="meta-item"><div class="ml">Est. Value</div><div class="mv" style="color:var(--good)">${esc(p.value)||'—'}</div></div>
-      <div class="meta-item"><div class="ml">Launch</div><div class="mv">${esc(p.launch)||'—'}</div></div>
-    </div>
-    ${p.archived?`<div class="banner info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg><span><b>Archived.</b> This campaign is hidden from lists and reports — nothing was deleted. Find it under Campaigns → Archived.</span></div>`:''}
+    ${metaStripHtml(p)}
+    ${p.archived?`<div class="banner info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg><span><b>Archived.</b> This project is hidden from lists and reports — nothing was deleted. Find it under Campaigns → Archived.</span></div>`:''}
     ${p.blocker?`<div class="pd-blocker"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span><b>Blocker:</b> ${esc(p.blocker)}</span></div>`:''}
+    ${projectLinkNoteHtml(p)}
     ${(function(){
       const st=approvalState(p); if(!st) return '';
       const last=(p._approvals||[])[p._approvals.length-1]||{};
@@ -354,23 +502,9 @@ function renderProjectDetail(){
     })()}
     <div class="tasks-head"><h3>Files</h3><span class="tg-count num">${(p._files||[]).length}</span><button class="btn sm" style="margin-left:auto" onclick="pickFile('${p.id}',null)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>Attach file</button></div>
     <div style="margin-bottom:18px">
-      ${(p._files||[]).length ? p._files.map((l,fi)=>`<div class="att" style="cursor:pointer" onclick="openPFile('${p.id}',${fi})"><span class="ai"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span style="flex:1;min-width:0"><div class="al">${esc(l.label)}</div><div class="as">${esc(l.sub||'')}</div></span>${(isAdminMe()||l.by===ME)?`<button class="icon-btn" style="width:28px;height:28px" title="Remove" onclick="event.stopPropagation();delPFile('${p.id}',${fi})"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`:''}</div>`).join('') : '<div class="att-empty">No files yet — attach briefs, creative, or lists for this campaign.</div>'}
+      ${(p._files||[]).length ? p._files.map((l,fi)=>`<div class="att" style="cursor:pointer" onclick="openPFile('${p.id}',${fi})"><span class="ai"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span style="flex:1;min-width:0"><div class="al">${esc(l.label)}</div><div class="as">${esc(l.sub||'')}</div></span>${(isAdminMe()||l.by===ME)?`<button class="icon-btn" style="width:28px;height:28px" title="Remove" onclick="event.stopPropagation();delPFile('${p.id}',${fi})"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`:''}</div>`).join('') : '<div class="att-empty">No files yet — attach briefs, specs, or lists for this project.</div>'}
     </div>
-    <div class="tasks-head"><h3>Tasks</h3><span class="prog-inline"><div class="bar" style="width:120px"><span style="width:${pr.pct}%"></span></div><span class="num" style="font-size:12.5px;color:var(--ink-3)">${pr.done}/${pr.total} done</span></span><button class="btn primary sm" style="margin-left:auto" onclick="toggleAddTask()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add task</button></div>
-    <div class="ttable">
-      <div class="thead-row"><span></span><span>Task</span><span>Assignee</span><span class="col-due">Due</span><span class="col-prio">Priority</span><span>Status</span></div>
-      ${rows || '<div style="padding:16px;color:var(--ink-3);font-size:13px">No tasks yet — add the first one.</div>'}
-      <div class="addtask-row">
-        <form class="addtask-form" id="addtask-form" onsubmit="addTask(event)">
-          <input id="nt-title" placeholder="New task name…" required />
-          <select id="nt-assignee">${(isAdminMe()?Object.keys(TEAM):[ME]).map(k=>`<option value="${k}">${esc(teamName(k))}</option>`).join('')}</select>
-          <input id="nt-due" type="date" />
-          <select id="nt-prio"><option value="high">High</option><option value="med" selected>Medium</option><option value="low">Low</option></select>
-          <button class="btn primary sm" type="submit">Add</button>
-        </form>
-      </div>
-    </div>
-    <div class="page-sub" style="margin-top:12px">${isAdminMe()?'As an admin you can edit and reassign any task — click an assignee chip to hand it to a teammate.':'You can update tasks assigned to you; admins manage everything else.'}</div>`;
+    ${tasksSectionHtml(p, pr)}`;
 }
 function toggleAddTask(){ const f=document.getElementById('addtask-form'); f.classList.toggle('open'); if(f.classList.contains('open')) document.getElementById('nt-title').focus(); }
 async function addTask(e){
@@ -378,13 +512,17 @@ async function addTask(e){
   const p=byId(currentProject);
   const title=document.getElementById('nt-title').value.trim(), due=document.getElementById('nt-due').value||null, pr=document.getElementById('nt-prio').value;
   const a = isAdminMe() ? document.getElementById('nt-assignee').value : ME; // base users create tasks for themselves only
+  const msSel = document.getElementById('nt-ms');
+  const msId = msSel ? (msSel.value || null) : null;
   if(!title) return;
   if(LIVE){
-    const d=await pInsert('tasks',{project_id:p.id,title,assignee_id:a,due,priority:pr,status:'todo',position:p.tasks.length});
+    const row={project_id:p.id,title,assignee_id:a,due,priority:pr,status:'todo',position:p.tasks.length};
+    if(msId && HAS_TECH) row.milestone_id=msId;
+    const d=await pInsert('tasks',row);
     if(!d) return;
-    p.tasks.push({id:d.id,t:d.title,a:d.assignee_id,due:d.due,pr:d.priority,s:d.status,_sub:[],_comments:[],_links:[]});
+    p.tasks.push({id:d.id,t:d.title,a:d.assignee_id,due:d.due,pr:d.priority,s:d.status,msId:d.milestone_id||null,_sub:[],_comments:[],_links:[]});
   } else {
-    p.tasks.push({id:'d'+(++demoSeq)+Date.now(),t:title,a,due,pr,s:'todo'});
+    p.tasks.push({id:'d'+(++demoSeq)+Date.now(),t:title,a,due,pr,s:'todo',msId});
   }
   if(a!==ME) notify(a, `${teamName(ME)} assigned you "${title}" in ${p.name}.`, p.id, p.tasks[p.tasks.length-1].id);
   rerender();
@@ -527,6 +665,7 @@ function rerender(){
   if(isView('calendar')) renderCalendar();
   if(isView('timeline')) renderTimeline();
   if(isView('reports')) renderReports();
+  if(isView('tech')) renderTech();
   if(currentTask) renderDrawer(currentTask.pid,currentTask.i);
   refreshCounts();
 }
@@ -725,6 +864,170 @@ function decorateMentions(escaped){
   return escaped;
 }
 document.addEventListener('click',e=>{ const mm=document.getElementById('mmenu'); if(mm && !mm.contains(e.target) && e.target.id!=='newcomment') mm.classList.remove('open'); });
+
+/* ===================================================================
+   Technical projects — list, create/edit, milestones
+   =================================================================== */
+let techFilter = 'active';
+function renderTech(){
+  const fo=document.getElementById('tech-fo'), fp=document.getElementById('tech-fp');
+  fo.innerHTML = `<option value="">All owners</option>`+Object.keys(TEAM).map(k=>`<option value="${k}">${esc(TEAM[k].name)}</option>`).join('');
+  fo.value=FILT.tech.owner;
+  const plats=[...new Set(visibleTech().map(p=>p.platform).filter(Boolean))].sort();
+  fp.innerHTML = `<option value="">All systems</option>`+plats.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');
+  fp.value = plats.includes(FILT.tech.platform) ? FILT.tech.platform : (FILT.tech.platform='', '');
+  fo.classList.toggle('on',!!FILT.tech.owner); fp.classList.toggle('on',!!FILT.tech.platform);
+
+  const f=techFilter;
+  const list=(f==='all' ? visibleTech()
+      : f==='active' ? visibleTech().filter(isLive)
+      : f==='planning' ? visibleTech().filter(p=>p.status==='planning'||p.status==='review')
+      : visibleTech().filter(p=>p.status==='complete'))
+    .filter(p=>!FILT.tech.owner || ownerOf(p)===FILT.tech.owner)
+    .filter(p=>!FILT.tech.platform || p.platform===FILT.tech.platform);
+
+  document.getElementById('tech-grid').innerHTML = list.map(p=>{
+    const pr=progress(p), stKey=projStatus(p), st=STATUS_PILL[stKey];
+    const mss=(p.milestones||[]);
+    const next=mss.slice().sort((a,b)=>(a.pos||0)-(b.pos||0)).map(m=>({m,st:milestoneState(p,m)})).find(x=>x.st.state!=='complete');
+    const red = stKey==='atrisk'||stKey==='blocked';
+    return `<div class="pcard t-tech" onclick="openProject('${p.id}')">
+      <div class="ph"><div style="flex:1"><div class="pn">${esc(p.name)}</div><div class="pd">${esc(p.desc||'')}</div></div><span class="pill ${st[0]}">${st[1]}</span></div>
+      <div class="tech-meta">${p.platform?`<span class="tag">${esc(p.platform)}</span>`:''}${p.workType?`<span class="tag">${esc(p.workType)}</span>`:''}<span class="prio ${p.priority||'med'}">${(p.priority||'med').toUpperCase()}</span></div>
+      <div class="bar"><span style="width:${pr.pct}%${red?';background:linear-gradient(90deg,var(--warn),var(--crit))':''}"></span></div>
+      <div class="prow"><span>${pr.done} of ${pr.total} tasks · ${mss.length} milestone${mss.length===1?'':'s'}</span><span class="pct num">${pr.pct}%</span></div>
+      ${next?`<div class="prow"><span class="page-sub">Next: ${esc(next.m.name)}${next.m.due?` · ${next.st.overdue?'overdue ':''}${fmtDue(next.m.due)}`:''}</span></div>`:''}
+      <div class="prow"><span class="chip-person">${av(ownerOf(p))}${esc(teamName(ownerOf(p)))}</span><span class="num" style="${red?'color:var(--crit)':''}">${p.targetDate?fmtDue(p.targetDate):'—'}</span></div>
+      ${(p.unblocks||[]).length?`<div class="prow"><span class="page-sub">Unblocks ${p.unblocks.length} campaign${p.unblocks.length===1?'':'s'}</span></div>`:''}
+    </div>`;
+  }).join('') || `<div style="color:var(--ink-3)">No technical projects in this view.</div>`;
+}
+
+/* ---------- create / edit ---------- */
+function openTechModal(id){
+  if(!isAdminMe()){ toast('Only admins can create or edit technical projects', true); return; }
+  if(!HAS_TECH){ toast('Run db/upgrade-technical-projects.sql first', true); return; }
+  editingTech=id;
+  const p=id?byId(id):null;
+  document.getElementById('tm-title').textContent = p?'Edit technical project':'New technical project';
+  document.getElementById('tm-save').textContent = p?'Save changes':'Create project';
+  document.getElementById('tm-owner').innerHTML = Object.keys(TEAM).map(k=>`<option value="${k}">${esc(TEAM[k].name)}</option>`).join('');
+  document.getElementById('tm-unblocks').innerHTML = visibleCampaigns().map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  const v=(el,val)=>{ document.getElementById(el).value = val; };
+  v('tm-name', p?p.name:'');             v('tm-desc', p?(p.desc||''):'');
+  v('tm-owner', p?(ownerOf(p)||ME):ME);  v('tm-status', p?p.status:'active');
+  v('tm-platform', p?(p.platform||''):''); v('tm-worktype', p?(p.workType||'Integration'):'Integration');
+  v('tm-requested', p?(p.requestedBy||''):''); v('tm-priority', p?(p.priority||'med'):'med');
+  v('tm-target', p?(p.targetDate||''):'');  v('tm-blocker', p?(p.blocker||''):'');
+  [...document.getElementById('tm-unblocks').options].forEach(o=>{ o.selected = p ? (p.unblocks||[]).includes(o.value) : false; });
+  document.getElementById('tm-delete').style.display = p?'':'none';
+  document.getElementById('tech-modal').classList.add('open');
+  document.getElementById('modal-ov').classList.add('open');
+  document.getElementById('tm-name').focus();
+}
+async function saveTech(e){
+  e.preventDefault();
+  if(!isAdminMe()){ toast('Admins only', true); return; }
+  const g=id=>document.getElementById(id).value.trim();
+  const unblocks=[...document.getElementById('tm-unblocks').selectedOptions].map(o=>o.value);
+  const fields={ name:g('tm-name'), description:g('tm-desc'), owner_id:g('tm-owner'), status:g('tm-status'),
+    platform:g('tm-platform'), work_type:g('tm-worktype'), requested_by:g('tm-requested'),
+    priority:g('tm-priority'), target_date:g('tm-target')||null, blocker:g('tm-blocker')||null,
+    kind:'technical', unblocks };
+  if(!fields.name) return;
+  const local={ name:fields.name, desc:fields.description, owner:fields.owner_id, status:fields.status,
+    kind:'technical', platform:fields.platform, workType:fields.work_type, requestedBy:fields.requested_by,
+    priority:fields.priority, targetDate:fields.target_date, blocker:fields.blocker, unblocks };
+  if(editingTech){
+    const p=byId(editingTech);
+    if(LIVE) await pUpdate('projects', p.id, fields);
+    Object.assign(p, local);
+    closeModal(); renderBoardPicker(); refreshCounts();
+    if(isView('project') && currentProject===p.id) renderProjectDetail(); else show(currentView);
+    toast('Project updated');
+  } else {
+    let id;
+    if(LIVE){ const d=await pInsert('projects', {...fields, sort:PROJECTS.length}); if(!d) return; id=d.id; }
+    else id='d'+(++demoSeq)+Date.now();
+    PROJECTS.push({ id, ...local, milestones:[], tasks:[], _files:[], _approvals:[], archived:false, approverId:null });
+    closeModal(); renderBoardPicker(); refreshCounts(); openProject(id);
+    toast('Technical project created');
+  }
+}
+async function deleteTech(){
+  if(!isAdminMe() || !editingTech) return;
+  const p=byId(editingTech);
+  if(!confirm(`Delete "${p.name}" with all ${p.tasks.length} of its tasks and milestones?`)) return;
+  if(!confirm('This cannot be undone. Really delete the whole project?')) return;
+  if(LIVE){
+    const paths=[...(p._files||[]), ...p.tasks.flatMap(t=>t._links||[])].filter(l=>l.path).map(l=>l.path);
+    const {error}=await sb.from('projects').delete().eq('id',p.id);
+    if(error){ toast(friendlyDbError(error), true); return; }
+    if(paths.length){ try{ sb.storage.from('pmpm-files').remove(paths); }catch(_){} }
+  }
+  PROJECTS.splice(PROJECTS.indexOf(p),1);
+  if(currentProject===p.id) currentProject=null;
+  closeModal(); closeDrawer(); renderBoardPicker(); refreshCounts(); show('tech');
+  toast('Project deleted');
+}
+
+/* ---------- milestones ---------- */
+async function addMilestone(pid){
+  if(!isAdminMe()){ toast('Admins only', true); return; }
+  const p=byId(pid);
+  const name=(prompt('Milestone name (for example: Pre-Launch):')||'').trim(); if(!name) return;
+  const due=(prompt('Target date as YYYY-MM-DD, or leave blank:')||'').trim()||null;
+  if(due && !/^\d{4}-\d{2}-\d{2}$/.test(due)){ toast('Dates need to look like 2026-11-16', true); return; }
+  const ms={ id:'ms'+(++demoSeq), name, due, pos:(p.milestones||[]).length };
+  if(LIVE && HAS_TECH){
+    const d=await pInsert('milestones',{project_id:pid, name, due, position:ms.pos});
+    if(!d) return; ms.id=d.id;
+  }
+  (p.milestones=p.milestones||[]).push(ms);
+  renderProjectDetail(); toast('Milestone added');
+}
+async function editMilestone(pid,msId){
+  if(!isAdminMe()){ toast('Admins only', true); return; }
+  const p=byId(pid), ms=(p.milestones||[]).find(m=>m.id===msId); if(!ms) return;
+  const name=(prompt('Milestone name:', ms.name)||'').trim(); if(!name) return;
+  const due=(prompt('Target date as YYYY-MM-DD, blank to clear:', ms.due||'')||'').trim()||null;
+  if(due && !/^\d{4}-\d{2}-\d{2}$/.test(due)){ toast('Dates need to look like 2026-11-16', true); return; }
+  ms.name=name; ms.due=due;
+  if(LIVE && HAS_TECH) await pUpdate('milestones', ms.id, {name, due});
+  renderProjectDetail(); toast('Milestone updated');
+}
+async function deleteMilestone(pid,msId){
+  if(!isAdminMe()){ toast('Admins only', true); return; }
+  const p=byId(pid), ms=(p.milestones||[]).find(m=>m.id===msId); if(!ms) return;
+  const n=msTasks(p,msId).length;
+  if(!confirm(`Delete the "${ms.name}" milestone?${n?` Its ${n} task${n===1?'':'s'} stay in the project, just ungrouped.`:''}`)) return;
+  p.tasks.forEach(t=>{ if(t.msId===msId){ t.msId=null; if(LIVE) pUpdate('tasks', t.id, {milestone_id:null}); } });
+  if(LIVE && HAS_TECH){ const {error}=await sb.from('milestones').delete().eq('id',ms.id); if(error){ toast(friendlyDbError(error), true); return; } }
+  p.milestones.splice(p.milestones.indexOf(ms),1);
+  renderProjectDetail(); toast('Milestone deleted');
+}
+function setTaskMilestone(pid,i,msId){
+  const p=byId(pid), t=p.tasks[i];
+  if(!canEdit(t)){ denyEdit(); rerender(); return; }
+  t.msId = msId || null;
+  if(LIVE) pUpdate('tasks', t.id, {milestone_id:t.msId});
+  rerender();
+}
+
+/* The top-bar New button creates whatever kind of thing you're looking at. */
+function newItem(){ if(currentView==='tech') openTechModal(null); else openCampaignModal(null); }
+
+/* ---------- shared-view Campaign / Technical toggle ---------- */
+function setTypeFilter(v){
+  FILT.type=v;
+  document.querySelectorAll('[data-typeseg] button').forEach(b=>b.classList.toggle('on', b.dataset.t===v));
+  renderBoardPicker();
+  show(currentView);
+}
+document.addEventListener('click', e=>{
+  const b=e.target.closest('[data-typeseg] button'); if(!b) return;
+  setTypeFilter(b.dataset.t);
+});
 
 /* ===================================================================
    Campaign approvals
@@ -1362,7 +1665,7 @@ async function exportCampaign(id){
    RENDER — My Tasks
    =================================================================== */
 function renderMyTasks(){
-  const mine = visibleProjects().flatMap(p=>p.tasks.map((t,i)=>({t,p,i}))).filter(x=>x.t.a===ME && x.t.s!=='done');
+  const mine = typedProjects().flatMap(p=>p.tasks.map((t,i)=>({t,p,i}))).filter(x=>x.t.a===ME && x.t.s!=='done');
   const buckets={Overdue:[],'Due Today':[],'This Week':[],Later:[]};
   mine.forEach(x=>{ const d=x.t.due?new Date(x.t.due+'T00:00:00'):null; if(!d){buckets.Later.push(x);return;} const diff=Math.round((d-TODAY)/86400000); if(diff<0)buckets.Overdue.push(x); else if(diff===0)buckets['Due Today'].push(x); else if(diff<=7)buckets['This Week'].push(x); else buckets.Later.push(x); });
   const over=buckets.Overdue.length, today=buckets['Due Today'].length, blocked=mine.filter(x=>x.t.s==='blocked').length;
@@ -1372,7 +1675,7 @@ function renderMyTasks(){
     const crit=name==='Overdue';
     return `<div class="task-group"><div class="tg-head"><h3 style="${crit?'color:var(--crit)':''}">${name}</h3><span class="tg-count num">${arr.length}</span></div>${arr.map(({t,p,i})=>{
       const over=t.due&&new Date(t.due+'T00:00:00')<TODAY;
-      return `<div class="task"><button class="check" onclick="cycleDone('${p.id}',${i})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></button><div class="t-body"><div class="t-title" style="cursor:pointer" onclick="openTask('${p.id}',${i})">${esc(t.t)}${t.recur?' <span title="Repeats">🔁</span>':''}</div><div class="t-meta"><span class="tag" style="cursor:pointer" onclick="openProject('${p.id}')">${esc(p.name)}</span><span class="t-due ${over?'over':''}">${over?'Overdue · ':'Due '}${fmtDue(t.due)}</span>${(t.bt||t.blockedBy)?`<span class="pill crit" style="font-size:11px">Blocked</span>`:''}${t.blocks?`<span class="pill crit plain" style="font-size:11px">Blocks work</span>`:''}</div></div><div class="t-right"><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></div></div>`;
+      return `<div class="task"><button class="check" onclick="cycleDone('${p.id}',${i})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></button><div class="t-body"><div class="t-title" style="cursor:pointer" onclick="openTask('${p.id}',${i})">${esc(t.t)}${t.recur?' <span title="Repeats">🔁</span>':''}</div><div class="t-meta"><span class="tag" style="cursor:pointer" onclick="openProject('${p.id}')">${esc(p.name)}</span>${isTech(p)?'<span class="kind technical">Tech</span>':''}<span class="t-due ${over?'over':''}">${over?'Overdue · ':'Due '}${fmtDue(t.due)}</span>${(t.bt||t.blockedBy)?`<span class="pill crit" style="font-size:11px">Blocked</span>`:''}${t.blocks?`<span class="pill crit plain" style="font-size:11px">Blocks work</span>`:''}</div></div><div class="t-right"><span class="prio ${t.pr}">${(t.pr||'').toUpperCase()}</span></div></div>`;
     }).join('')}</div>`;
   }).join('');
 }
@@ -1380,7 +1683,7 @@ function renderMyTasks(){
 /* ===================================================================
    RENDER — Board
    =================================================================== */
-function renderBoardPicker(){ document.getElementById('board-pick').innerHTML = visibleProjects().filter(p=>p.status!=='complete').map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join(''); }
+function renderBoardPicker(){ document.getElementById('board-pick').innerHTML = typedProjects().filter(p=>p.status!=='complete').map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join(''); }
 function renderBoard(id){
   const picker=document.getElementById('board-pick');
   id=id||picker.value||(PROJECTS[0]&&PROJECTS[0].id);
@@ -1426,8 +1729,25 @@ function cardClick(pid,idx){ if(suppressClick) return; openTask(pid,idx); }
    RENDER — Roadblocks
    =================================================================== */
 function renderRoadblocks(){
-  const blocked = visibleProjects().flatMap(p=>p.tasks.map((t,i)=>({t,p,i})).filter(x=>x.t.s==='blocked'));
+  const blocked = typedProjects().flatMap(p=>p.tasks.map((t,i)=>({t,p,i})).filter(x=>x.t.s==='blocked'));
   document.getElementById('rb-banner-text').innerHTML = blocked.length ? `<b>${blocked.length} task${blocked.length>1?'s are':' is'} blocked.</b> Each is waiting on an upstream task or input before work can continue.` : `No roadblocks right now — nothing is blocked.`;
+  const waiting = FILT.type==='technical' ? []
+    : visibleCampaigns().map(c=>({c, techs:techBlocking(c.id)})).filter(x=>x.techs.length);
+  document.getElementById('rb-tech').innerHTML = waiting.length ? `
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-h"><h3>Campaigns waiting on technical work</h3><span class="page-sub" style="margin-left:auto">${waiting.length} campaign${waiting.length===1?'':'s'}</span></div>
+      <div style="padding:2px 18px 14px">
+        ${waiting.map(({c,techs})=>techs.map(t=>{ const {pr,next}=techSummary(t);
+          return `<div class="waiting-row">
+            <span class="tag" style="cursor:pointer" onclick="openProject('${c.id}')">${esc(c.name)}</span>
+            <span style="color:var(--ink-3)">waiting on</span>
+            <span style="flex:1;min-width:0;font-weight:650;cursor:pointer" onclick="openProject('${t.id}')">${esc(t.name)}</span>
+            <div class="ms-bar"><span style="width:${pr.pct}%"></span></div>
+            <span class="ms-count">${pr.pct}%</span>
+            ${next?`<span class="page-sub" style="min-width:150px;text-align:right">next: ${esc(next.m.name)}${next.m.due?` · ${fmtDue(next.m.due)}`:''}</span>`:''}
+          </div>`; }).join('')).join('')}
+      </div>
+    </div>` : '';
   document.getElementById('roadblocks-body').innerHTML = blocked.map(({t,p,i})=>{
     const u=upstreamOf(p,t);
     const uIdx = u ? p.tasks.indexOf(u) : -1;
@@ -1436,7 +1756,7 @@ function renderRoadblocks(){
       : `<div class="tt">${esc(t.blockedBy||'Unspecified blocker')}</div><div class="mt"><span class="pill warn" style="font-size:11px">External input needed</span></div>`;
     return `
     <div class="rb crit">
-      <div class="rb-side"><div class="lbl">Blocked task</div><div class="tt" style="cursor:pointer" onclick="openTask('${p.id}',${i})">${esc(t.t)}</div><div class="mt"><span class="tag" style="cursor:pointer" onclick="openProject('${p.id}')">${esc(p.name)}</span>${av(t.a)}</div></div>
+      <div class="rb-side"><div class="lbl">Blocked task</div><div class="tt" style="cursor:pointer" onclick="openTask('${p.id}',${i})">${esc(t.t)}</div><div class="mt"><span class="tag" style="cursor:pointer" onclick="openProject('${p.id}')">${esc(p.name)}</span>${isTech(p)?'<span class="kind technical">Tech</span>':''}${av(t.a)}</div></div>
       <div class="rb-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg><div class="cap">waiting on</div></div>
       <div class="rb-side"><div class="lbl">Roadblock</div>${right}</div>
     </div>`;
@@ -1452,7 +1772,7 @@ function calToday(){ calY=TODAY.getFullYear(); calM=TODAY.getMonth(); renderCale
 function renderCalendar(){
   // campaign filter options reflect current data; preserve selection
   const fp=document.getElementById('cal-fp');
-  fp.innerHTML = `<option value="">All campaigns</option>`+visibleProjects().map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  fp.innerHTML = `<option value="">All projects</option>`+typedProjects().map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
   fp.value = byId(FILT.cal.proj) ? FILT.cal.proj : (FILT.cal.proj='', '');
   document.getElementById('cal-fa').classList.toggle('on',!!FILT.cal.a);
   fp.classList.toggle('on',!!FILT.cal.proj);
@@ -1460,7 +1780,7 @@ function renderCalendar(){
 
   // index tasks by due date string (respecting filters)
   const byDue={};
-  visibleProjects().forEach(p=>p.tasks.forEach((t,i)=>{
+  typedProjects().forEach(p=>p.tasks.forEach((t,i)=>{
     if(!t.due) return;
     if(FILT.cal.a && t.a!==FILT.cal.a) return;
     if(FILT.cal.proj && p.id!==FILT.cal.proj) return;
@@ -1524,7 +1844,7 @@ function renderTimeline(){
   document.getElementById('tl-filt-portfolio').style.display = single?'none':'';
   document.getElementById('tl-filt-campaign').style.display = single?'':'none';
   const pick=document.getElementById('tl-pick');
-  const vis=visibleProjects();
+  const vis=typedProjects();
   pick.innerHTML = vis.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
   const cur=byId(tlProject);
   if(!cur || cur.archived) tlProject=(vis.find(isLive)||vis[0]||{}).id||null;
@@ -1538,7 +1858,7 @@ function renderTimeline(){
   tlToday();
 }
 function renderTlPortfolio(inner){
-  const list=visibleProjects()
+  const list=typedProjects()
     .filter(p=>!FILT.tl.owner || ownerOf(p)===FILT.tl.owner)
     .filter(p=>!FILT.tl.motion || p.motion===FILT.tl.motion);
   const rows=[], undated=[], allDates=[];
@@ -1642,7 +1962,8 @@ function tlMarkerClick(e,pid,idx){ if(tlSuppress) return; openTask(pid,idx); }
    =================================================================== */
 function weekKey(iso){ const d=new Date(iso+'T00:00:00'); d.setDate(d.getDate()-d.getDay()); const pad=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
 function renderReports(){
-  const vis=visibleProjects();
+  const vis=visibleProjects();          // person-centric charts count every kind of work
+  const camps=visibleCampaigns();       // campaign-specific charts stay campaign-only
   const allTasks=vis.flatMap(p=>p.tasks.map(t=>({t,p})));
   const t0=todayISO();
 
@@ -1665,11 +1986,11 @@ function renderReports(){
   const perPerson=Object.keys(TEAM).map(k=>{ const mine=judged.filter(x=>x.t.a===k); const ot=mine.filter(x=>x.t.completedAt.slice(0,10)<=x.t.due).length; return {k, n:mine.length, r:mine.length?Math.round(ot/mine.length*100):0}; }).filter(x=>x.n);
 
   // 3+4. campaign progress + status donut
-  const prog=vis.filter(p=>p.status!=='complete').map(p=>({p,pr:progress(p)})).sort((a,b)=>b.pr.pct-a.pr.pct);
-  const stCounts={}; vis.forEach(p=>stCounts[p.status]=(stCounts[p.status]||0)+1);
+  const prog=camps.filter(p=>p.status!=='complete').map(p=>({p,pr:progress(p)})).sort((a,b)=>b.pr.pct-a.pr.pct);
+  const stCounts={}; camps.forEach(p=>stCounts[p.status]=(stCounts[p.status]||0)+1);
   const donutColors={active:'var(--accent)',blocked:'var(--crit)',planning:'var(--ink-3)',review:'var(--warn)',complete:'var(--good)'};
   const stLabel={active:'Active',blocked:'Blocked',planning:'In planning',review:'Under review',complete:'Completed'};
-  const totalC=vis.length||1, C=2*Math.PI*40; let acc=0;
+  const totalC=camps.length||1, C=2*Math.PI*40; let acc=0;
   const donutSegs=Object.keys(donutColors).filter(k=>stCounts[k]).map(k=>{ const frac=stCounts[k]/totalC;
     const seg=`<circle r="40" cx="60" cy="60" fill="none" stroke="${donutColors[k]}" stroke-width="15" stroke-dasharray="${(frac*C).toFixed(2)} ${C.toFixed(2)}" stroke-dashoffset="${(-acc*C).toFixed(2)}" transform="rotate(-90 60 60)"><title>${stLabel[k]}: ${stCounts[k]}</title></circle>`;
     acc+=frac; return seg; }).join('');
@@ -1685,7 +2006,7 @@ function renderReports(){
 
   // 6. pipeline by motion
   const pipe={recruit:0,grow:0,retain:0};
-  vis.filter(isLive).forEach(p=>{ if(pipe[p.motion]!=null) pipe[p.motion]+=parseValue(p.value); });
+  camps.filter(isLive).forEach(p=>{ if(pipe[p.motion]!=null) pipe[p.motion]+=parseValue(p.value); });
   const pipeSum=Object.values(pipe).reduce((a,b)=>a+b,0), pipeMax=Math.max(...Object.values(pipe),1);
   const motionColor={recruit:'var(--recruit)',grow:'var(--grow)',retain:'var(--retain)'};
 
@@ -1703,7 +2024,7 @@ function renderReports(){
   <div class="card rep"><div class="card-h"><h3>Campaign progress</h3><span class="page-sub" style="margin-left:auto">open campaigns</span></div>
     <div style="padding:2px 18px 16px">${prog.map(({p,pr})=>`<div class="wl-row" style="cursor:pointer" onclick="openProject('${p.id}')"><div style="width:170px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(p.name)}">${esc(p.name)}</div><div class="wl-bar"><span style="width:${pr.pct}%;background:${projStatus(p)==='atrisk'?'var(--crit)':'var(--accent)'}"></span></div><span class="num" style="width:76px;text-align:right;font-weight:700">${pr.pct}% <span style="color:var(--ink-3);font-weight:600">${pr.done}/${pr.total}</span></span></div>`).join('')||'<div class="att-empty">No open campaigns.</div>'}</div></div>
 
-  <div class="card rep"><div class="card-h"><h3>Campaigns by status</h3><span class="page-sub" style="margin-left:auto">${vis.length} campaigns</span></div>
+  <div class="card rep"><div class="card-h"><h3>Campaigns by status</h3><span class="page-sub" style="margin-left:auto">${camps.length} campaigns</span></div>
     <div style="padding:10px 18px 16px;display:flex;align-items:center;gap:26px;flex-wrap:wrap">
       <svg viewBox="0 0 120 120" width="130" height="130">${donutSegs}<text x="60" y="67" text-anchor="middle" font-size="24" font-weight="700" fill="var(--ink)">${vis.length}</text></svg>
       <div>${Object.keys(donutColors).filter(k=>stCounts[k]).map(k=>`<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;font-weight:600"><span style="width:10px;height:10px;border-radius:3px;background:${donutColors[k]};flex:none"></span>${stLabel[k]} <span class="num" style="color:var(--ink-3)">· ${stCounts[k]}</span></div>`).join('')}</div>
@@ -1748,14 +2069,15 @@ function runSearch(q){
   const hits=[];
   visibleProjects().forEach(p=>{
     if([p.name,p.desc,p.segment,p.solution].some(f=>f&&f.toLowerCase().includes(q)))
-      hits.push({kind:'camp', label:p.name, sub:`${p.segment||''} · ${STATUS_PILL[projStatus(p)][1]}`, click:`openProject('${p.id}')`});
+      hits.push({kind:'camp', label:p.name, kindLabel:isTech(p)?'Tech':'Campaign',
+        sub:`${isTech(p)?(p.platform||'Technical'):(p.segment||'')} · ${STATUS_PILL[projStatus(p)][1]}`, click:`openProject('${p.id}')`});
   });
   visibleProjects().forEach(p=>p.tasks.forEach((t,i)=>{
     if(t.t.toLowerCase().includes(q))
       hits.push({kind:'task', label:t.t, sub:`${p.name} · ${teamName(t.a)}`, click:`openTask('${p.id}',${i})`});
   }));
   box.innerHTML = hits.length
-    ? hits.slice(0,9).map(h=>`<div class="sr-row" onmousedown="closeSearch();${h.click}"><span class="sr-kind ${h.kind}">${h.kind==='camp'?'Campaign':'Task'}</span><div style="min-width:0"><div style="font-weight:620;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(h.label)}</div><div class="sr-sub">${esc(h.sub)}</div></div></div>`).join('')
+    ? hits.slice(0,9).map(h=>`<div class="sr-row" onmousedown="closeSearch();${h.click}"><span class="sr-kind ${h.kind}">${h.kindLabel || (h.kind==='camp'?'Campaign':'Task')}</span><div style="min-width:0"><div style="font-weight:620;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(h.label)}</div><div class="sr-sub">${esc(h.sub)}</div></div></div>`).join('')
     : `<div class="sr-none">No matches for "${esc(q)}"</div>`;
   box.classList.add('open');
 }
@@ -1765,7 +2087,7 @@ document.addEventListener('click',e=>{ if(!e.target.closest('.search')) document
 /* ===================================================================
    Navigation
    =================================================================== */
-const titles = { dashboard:['Dashboard','Demand Gen campaign portfolio'], mytasks:['My Tasks',"Everything assigned to you, grouped by when it's due"], board:['Board','Kanban view · drag tasks across stages'], projects:['Campaigns','All Demand Gen campaigns and their progress'], project:['Campaign','Tasks, owner & assignments'], calendar:['Calendar','Every task on its due date'], timeline:['Timeline','Campaigns and tasks across time'], reports:['Reports','Completion, workload & pipeline at a glance'], team:['Team','People, sign-ins & permissions'], templates:['Templates','Reusable campaign playbooks'], roadblocks:['Roadblocks','Tasks blocked by upstream work or inputs'] };
+const titles = { dashboard:['Dashboard','Demand Gen campaign portfolio'], mytasks:['My Tasks',"Everything assigned to you, grouped by when it's due"], board:['Board','Kanban view · drag tasks across stages'], projects:['Campaigns','All Demand Gen campaigns and their progress'], project:['Campaign','Tasks, owner & assignments'], calendar:['Calendar','Every task on its due date'], tech:['Technical Projects','Behind-the-scenes work, grouped into milestones'], timeline:['Timeline','Campaigns and tasks across time'], reports:['Reports','Completion, workload & pipeline at a glance'], team:['Team','People, sign-ins & permissions'], templates:['Templates','Reusable campaign playbooks'], roadblocks:['Roadblocks','Tasks blocked by upstream work or inputs'] };
 function show(view){
   if((view==='team'||view==='templates') && !isAdminMe()) view='dashboard';
   currentView=view;
@@ -1775,6 +2097,13 @@ function show(view){
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.view===navKey));
   document.getElementById('pageTitle').textContent=titles[view][0];
   document.getElementById('pageSub').textContent=titles[view][1];
+  if(view==='project'){                       // one screen, two kinds of project
+    const p=byId(currentProject);
+    if(p){
+      document.getElementById('pageTitle').textContent = isTech(p)?'Technical Project':'Campaign';
+      document.getElementById('pageSub').textContent   = isTech(p)?'Tasks, milestones & assignments':'Tasks, owner & assignments';
+    }
+  }
   if(view==='dashboard') renderDashboard();
   if(view==='mytasks') renderMyTasks();
   if(view==='board') renderBoard();
@@ -1782,6 +2111,7 @@ function show(view){
   if(view==='calendar') renderCalendar();
   if(view==='timeline') renderTimeline();
   if(view==='reports') renderReports();
+  if(view==='tech') renderTech();
   if(view==='team') renderTeam();
   if(view==='templates') renderTemplates();
   if(view==='roadblocks') renderRoadblocks();
@@ -1790,7 +2120,8 @@ function show(view){
 function refreshCounts(){
   const vis=visibleProjects();
   document.getElementById('c-mine').textContent = vis.flatMap(p=>p.tasks).filter(t=>t.a===ME&&t.s!=='done').length;
-  document.getElementById('c-proj').textContent = vis.filter(p=>p.status!=='complete').length;
+  document.getElementById('c-proj').textContent = vis.filter(p=>p.status!=='complete' && !isTech(p)).length;
+  const tn=document.getElementById('c-tech'); if(tn) tn.textContent = visibleTech().filter(p=>p.status!=='complete').length;
   document.getElementById('c-rb').textContent = vis.flatMap(p=>p.tasks).filter(t=>t.s==='blocked').length;
 }
 function rerenderCurrent(){
@@ -1859,10 +2190,11 @@ function applyTemplateChoice(){
     `<div class="rolemap-row"><span class="rl">${esc(r)}</span><select data-role="${esc(r)}">${Object.keys(TEAM).map(k=>`<option value="${k}" ${k===roleDefault(r)?'selected':''}>${esc(teamName(k))}</option>`).join('')}</select></div>`).join('');
 }
 function closeModal(){
-  editingProject = null; editingTpl = null; importData = null;
+  editingProject = null; editingTpl = null; editingTech = null; importData = null;
   document.getElementById('campaign-modal').classList.remove('open');
   document.getElementById('user-modal').classList.remove('open');
   document.getElementById('tpl-modal').classList.remove('open');
+  document.getElementById('tech-modal').classList.remove('open');
   document.getElementById('import-modal').classList.remove('open');
   document.getElementById('modal-ov').classList.remove('open');
 }
@@ -2185,6 +2517,7 @@ async function boot(){
   document.getElementById('nav').addEventListener('click',e=>{ const it=e.target.closest('.nav-item'); if(!it||it.classList.contains('disabled')||!it.dataset.view) return; show(it.dataset.view); });
   document.querySelectorAll('[data-jump]').forEach(el=>el.addEventListener('click',()=>show(el.dataset.jump)));
   document.getElementById('proj-filter').addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b) return; currentFilter=b.dataset.f; document.querySelectorAll('#proj-filter button').forEach(x=>x.classList.toggle('on',x===b)); renderProjects(currentFilter); });
+  document.getElementById('tech-filter').addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b) return; techFilter=b.dataset.f; document.querySelectorAll('#tech-filter button').forEach(x=>x.classList.toggle('on',x===b)); renderTech(); });
   document.getElementById('tl-mode').addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b) return; tlMode=b.dataset.m; document.querySelectorAll('#tl-mode button').forEach(x=>x.classList.toggle('on',x===b)); renderTimeline(); });
   document.getElementById('mode-badge').textContent = LIVE ? 'Live' : 'Demo';
   document.getElementById('mode-badge').className = 'mode-badge '+(LIVE?'live':'demo');

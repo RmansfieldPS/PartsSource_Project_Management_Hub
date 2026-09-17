@@ -435,6 +435,33 @@ select.proj-pick { border: 1px solid var(--line-strong); background: var(--surfa
 @media (max-width: 1080px) { .rep-grid { grid-template-columns: 1fr; } }
 .rep svg text { font-family: var(--font); }
 
+/* Milestones */
+.ms-group { margin-bottom: 18px; }
+.ms-head { display: flex; align-items: center; gap: 10px; padding: 9px 14px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px 10px 0 0; border-bottom: none; flex-wrap: wrap; }
+.ms-name { font-weight: 720; font-size: 13.5px; letter-spacing: -.1px; }
+.ms-due { font-size: 12px; color: var(--ink-3); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ms-due.over { color: var(--crit); }
+.ms-bar { height: 6px; width: 110px; background: var(--ground); border-radius: 5px; overflow: hidden; }
+.ms-bar > span { display: block; height: 100%; border-radius: 5px; background: linear-gradient(90deg, var(--accent), var(--teal)); }
+.ms-count { font-size: 12px; color: var(--ink-3); font-weight: 650; font-variant-numeric: tabular-nums; }
+.ms-group .ttable { border-radius: 0 0 10px 10px; }
+.ms-actions { display: flex; gap: 4px; margin-left: auto; }
+.ms-empty { padding: 14px 16px; color: var(--ink-3); font-size: 12.5px; background: var(--surface); border: 1px solid var(--line); border-top: none; border-radius: 0 0 10px 10px; }
+
+/* Type badge (campaign vs technical) */
+.kind { font-size: 10px; font-weight: 800; letter-spacing: .4px; text-transform: uppercase; padding: 2px 7px; border-radius: 5px; white-space: nowrap; }
+.kind.technical { color: var(--retain); background: color-mix(in srgb, var(--retain) 14%, transparent); }
+.kind.campaign { color: var(--accent-ink); background: var(--accent-soft); }
+.typeseg { flex: none; }
+
+/* Technical project cards */
+.pcard.t-tech { border-top-color: var(--retain); }
+.tech-meta { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 2px; }
+.unblocks-note { display: flex; align-items: flex-start; gap: 9px; background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent); color: var(--accent-ink); border-radius: 9px; padding: 10px 13px; font-size: 12.5px; font-weight: 550; margin-bottom: 14px; line-height: 1.5; }
+.unblocks-note svg { width: 16px; height: 16px; flex: none; margin-top: 1px; }
+.waiting-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.waiting-row:last-child { border-bottom: none; }
+
 /* Import */
 .import-cta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--surface-2); border: 1px dashed var(--line-strong); border-radius: 10px; padding: 12px 14px; }
 .im-sec { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--ink-3); font-weight: 700; margin: 16px 0 8px; }

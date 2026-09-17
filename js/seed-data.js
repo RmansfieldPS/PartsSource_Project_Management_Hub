@@ -94,6 +94,90 @@ window.PMPM_SEED = {
       {t:'IDG email series', a:'NB', due:'2026-05-12', pr:'med', s:'done'},
       {t:'Bi-weekly reporting to ELT', a:'MH', due:'2026-06-30', pr:'med', s:'done'} ]}
   ],
+  /* Technical projects — behind-the-scenes work, grouped into milestones (phases).
+     Seeded from the real rebrand registers; go-live is mid-November 2026. */
+  techProjects: [
+    { id:'rebrand-web', name:'Website Rebrand & Domain Cutover',
+      desc:'New brand domain, rebuilt templates, redirect map and cutover for the new PartsSource website.',
+      platform:'WordPress · DNS · GA4', workType:'Migration', requestedBy:'Brand & Exec',
+      priority:'high', targetDate:'2026-11-16', status:'active', owner:'BO',
+      unblocks:['mktplace','crosssell'], blocker:null,
+      milestones:[
+        { name:'Pre-Launch',  due:'2026-11-06' },
+        { name:'Cutover',     due:'2026-11-16' },
+        { name:'Post-Launch', due:'2026-12-11' } ],
+      tasks:[
+        { t:'Register new brand domain plus defensive TLDs and misspellings', a:'BO', due:'2026-10-02', pr:'high', s:'done',     ms:0 },
+        { t:'Confirm trademark clearance for the new name and taglines',      a:'MH', due:'2026-10-09', pr:'high', s:'done',     ms:0 },
+        { t:'Build the full DNS record plan (A, CNAME, MX, TXT, SRV)',        a:'BO', due:'2026-10-09', pr:'high', s:'progress', ms:0 },
+        { t:'Inventory every subdomain and assign a destination',             a:'BO', due:'2026-10-13', pr:'med',  s:'progress', ms:0 },
+        { t:'Issue TLS certificates including wildcard coverage',             a:'BO', due:'2026-10-16', pr:'high', s:'todo',     ms:0 },
+        { t:'Replace logo, typography, colour and spacing tokens in the theme', a:'MD', due:'2026-10-16', pr:'high', s:'progress', ms:0 },
+        { t:'Configure SPF, DKIM and DMARC on the sending domain',            a:'RM', due:'2026-10-16', pr:'high', s:'todo',     ms:0 },
+        { t:'Rebuild global templates: header, nav, footer, forms, 404 and 500', a:'BO', due:'2026-10-23', pr:'high', s:'todo',  ms:0,
+          sub:['Header & navigation','Footer','Forms','404 / 500 pages'] },
+        { t:'Capture pre-launch SEO baseline: rankings, sessions, conversions', a:'CG', due:'2026-10-23', pr:'high', s:'todo',   ms:0 },
+        { t:'Validate the new palette against WCAG 2.2 AA contrast',          a:'NB', due:'2026-10-30', pr:'med',  s:'todo',     ms:0 },
+        { t:'Run full pre-launch QA across browsers, devices and assistive tech', a:'BO', due:'2026-11-04', pr:'high', s:'todo', ms:0 },
+        { t:'Rehearse the cutover in staging with production-like DNS',       a:'BO', due:'2026-11-06', pr:'high', s:'todo',     ms:0 },
+
+        { t:'Document the rollback plan with triggers, owners and a deadline', a:'BO', due:'2026-11-13', pr:'high', s:'todo',    ms:1 },
+        { t:'Publish the 1:1 301 redirect map from every legacy URL',         a:'BO', due:'2026-11-16', pr:'high', s:'todo',     ms:1 },
+        { t:'Point every canonical tag at the new domain',                    a:'BO', due:'2026-11-16', pr:'high', s:'todo',     ms:1 },
+        { t:'Update robots.txt and confirm no blanket disallow ships',        a:'BO', due:'2026-11-16', pr:'high', s:'todo',     ms:1 },
+        { t:'Add the new domain to Search Console and file Change of Address', a:'CG', due:'2026-11-16', pr:'high', s:'todo',    ms:1 },
+        { t:'Reconfigure analytics properties and cross-domain measurement',  a:'CG', due:'2026-11-16', pr:'high', s:'todo',     ms:1 },
+        { t:'Update tag manager containers and triggers on the legacy hostname', a:'CG', due:'2026-11-16', pr:'med', s:'todo',   ms:1 },
+        { t:'Forward every legacy email alias including role addresses',      a:'RM', due:'2026-11-16', pr:'med',  s:'todo',     ms:1 },
+        { t:'Update terms, privacy policy and cookie notice with the new entity', a:'MH', due:'2026-11-16', pr:'high', s:'todo', ms:1 },
+        { t:'Update OAuth app names, redirect URIs and consent screens',      a:'BO', due:'2026-11-17', pr:'high', s:'todo',     ms:1 },
+
+        { t:'Monitor 404s daily and close redirect gaps',                     a:'BO', due:'2026-11-20', pr:'high', s:'todo',     ms:2 },
+        { t:'Compare organic traffic and rankings against the baseline',      a:'CG', due:'2026-12-04', pr:'med',  s:'todo',     ms:2 },
+        { t:'Re-run the accessibility audit on the live site',                a:'NB', due:'2026-12-04', pr:'med',  s:'todo',     ms:2 },
+        { t:'Decommission or archive legacy properties',                      a:'BO', due:'2026-12-11', pr:'low',  s:'todo',     ms:2 } ]},
+
+    { id:'rebrand-marketo', name:'Marketo Rebrand Readiness',
+      desc:'Parent company name arrives and PartsSource continues — an entity and endorsement change across every Marketo asset.',
+      platform:'Adobe Marketo Engage', workType:'Migration', requestedBy:'Brand & Exec',
+      priority:'high', targetDate:'2026-11-16', status:'active', owner:'RM',
+      unblocks:['welcome','renewal','proparts'],
+      blocker:'Legal entity decision pending — drives footers, consent and policy links',
+      milestones:[
+        { name:'Pre-Launch',  due:'2026-11-06' },
+        { name:'Announcement Cutover', due:'2026-11-16' },
+        { name:'Post-Launch', due:'2026-12-11' } ],
+      tasks:[
+        { t:'Confirm which legal entity owns commercial sending and consent', a:'MH', due:'2026-09-30', pr:'high', s:'blocked',  ms:0,
+          blockedBy:'Legal decision memo outstanding' },
+        { t:'Confirm sending, landing page and tracking domains stay on partssource.com', a:'RM', due:'2026-09-30', pr:'high', s:'done', ms:0 },
+        { t:'Define the endorsement model for the PartsSource + parent lockup', a:'MD', due:'2026-10-07', pr:'high', s:'progress', ms:0 },
+        { t:'Restrict edit and approval access to parent-name assets before the reveal', a:'RM', due:'2026-10-07', pr:'high', s:'done', ms:0 },
+        { t:'Audit the asset inventory: templates, snippets and landing pages', a:'NB', due:'2026-10-14', pr:'med', s:'progress', ms:0 },
+        { t:'Confirm DKIM stays verified for the current sending domain',     a:'RM', due:'2026-10-14', pr:'high', s:'todo',     ms:0 },
+        { t:'Confirm SSL coverage and renewal owner for pages.partssource.com', a:'RM', due:'2026-10-14', pr:'med', s:'todo',    ms:0 },
+        { t:'Create folder-level tokens: parent name, entity, logo URL, website URL', a:'RM', due:'2026-10-21', pr:'high', s:'todo', ms:0 },
+        { t:'Define a production-safe test protocol with seed-only smart lists', a:'RM', due:'2026-10-21', pr:'high', s:'todo',  ms:0 },
+        { t:'Rebuild modular email templates on the new design system',       a:'RM', due:'2026-10-28', pr:'high', s:'todo',     ms:0,
+          sub:['Header & lockup','Body modules','Footer & unsubscribe'] },
+        { t:'Rebuild guided landing page templates',                          a:'RM', due:'2026-10-28', pr:'high', s:'todo',     ms:0 },
+        { t:'Replace hardcoded entity names and URLs with tokens',            a:'RM', due:'2026-11-04', pr:'high', s:'todo',     ms:0 },
+
+        { t:'Build the reveal-day checklist of every token, snippet and setting', a:'RM', due:'2026-11-13', pr:'high', s:'todo', ms:1 },
+        { t:'Update the CAN-SPAM footer with the parent entity and address',  a:'RM', due:'2026-11-16', pr:'high', s:'todo',     ms:1 },
+        { t:'Update the unsubscribe block, preference link and physical address', a:'RM', due:'2026-11-16', pr:'high', s:'todo', ms:1 },
+        { t:'Deploy Munchkin tracking on every new website template',         a:'BO', due:'2026-11-16', pr:'high', s:'todo',     ms:1 },
+        { t:'Confirm Munchkin domain settings cover every subdomain',         a:'BO', due:'2026-11-16', pr:'med',  s:'todo',     ms:1 },
+        { t:'Map changed landing page URLs and publish redirects',            a:'RM', due:'2026-11-16', pr:'high', s:'todo',     ms:1 },
+        { t:'Update form follow-up pages and redirect URLs',                  a:'RM', due:'2026-11-16', pr:'high', s:'todo',     ms:1 },
+        { t:'Update privacy, terms and cookie links to the parent entity',    a:'MH', due:'2026-11-16', pr:'med',  s:'todo',     ms:1 },
+        { t:'Test every embedded form on the new site and confirm routing',   a:'CG', due:'2026-11-17', pr:'high', s:'todo',     ms:1 },
+
+        { t:'Confirm CRM field mappings held through the renames',            a:'CG', due:'2026-11-20', pr:'med',  s:'todo',     ms:2 },
+        { t:'Monitor deliverability and engagement after the announcement',   a:'RM', due:'2026-12-04', pr:'high', s:'todo',     ms:2 },
+        { t:'Re-point reporting and attribution to the new naming',           a:'CG', due:'2026-12-11', pr:'med',  s:'todo',     ms:2 } ]}
+  ],
+
   /* Campaign templates — steps use role slots (matched to members.role),
      offsets in days relative to Launch (L), and dep = index of an earlier step. */
   templates: [

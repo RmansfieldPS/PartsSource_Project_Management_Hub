@@ -151,6 +151,7 @@
               <select class="fsel" id="proj-fs" onchange="FILT.proj.segment=this.value;renderProjects(currentFilter)"></select>
             </div>
             <span class="page-sub" style="margin-left:auto">Click any campaign to open its tasks</span>
+            <button class="btn sm" onclick="exportAllForAsana()" title="Download every project as Asana-ready CSVs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export for Asana</button>
           </div>
           <div class="proj-grid" id="proj-grid"></div>
         </section>
@@ -170,6 +171,7 @@
               <select class="fsel" id="tech-fp" onchange="FILT.tech.platform=this.value;renderTech()"></select>
             </div>
             <span class="page-sub" style="margin-left:auto">Behind-the-scenes work, grouped into milestones</span>
+            <button class="btn sm" onclick="exportAllForAsana()" title="Download every project as Asana-ready CSVs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export for Asana</button>
           </div>
           <div class="proj-grid" id="tech-grid"></div>
         </section>

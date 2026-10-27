@@ -222,5 +222,17 @@ rows → this shape; `buildFromSeed()` builds the same shape for demo.
   lives in `app_config` (RLS on, no policies, so app users can't read it). Silent
   when nothing is due; `select send_teams_digest(true)` forces a test post.
   Chosen over Power Automate because its HTTP connector is premium-licensed.
+- **Asana export (2026-10-27):** `exportAllForAsana()` — the team is migrating to
+  Asana. Builds a zip (JSZip lazy-loaded from jsdelivr) of one CSV per project
+  because Asana imports one project at a time, plus a portfolio summary, a
+  dependency list and a README. Runs against whatever is in memory, so it must be
+  clicked **while signed in** to capture live data — seed-data.js is the original
+  May snapshot and would be stale. Columns: Name, Notes, Assignee, Due Date,
+  Section/Column, Priority, Completed, Tags. `Section/Column` = milestone for
+  technical projects, status for campaigns, and rows are sorted so each section is
+  contiguous (Asana imports in file order). Asana's CSV importer cannot take
+  completion state, subtasks, dependencies or comments, so all of those are
+  preserved as text in Notes, with dependencies additionally listed in
+  00 - Dependencies.csv to recreate by hand.
 - Possible next (Tier 3): email digest (Edge Function + SendGrid/Resend),
   brief→Excel Claude skill, task reordering, bulk actions.

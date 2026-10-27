@@ -1614,6 +1614,179 @@ async function delPFile(pid,fi){
 }
 
 /* ===================================================================
+   Export everything for Asana
+   One CSV per project (Asana imports one project at a time), plus a
+   portfolio summary and a list of dependencies, zipped together.
+   Runs against whatever is loaded — i.e. live data when signed in.
+   =================================================================== */
+let JSZipReady=null;
+function loadJSZip(){
+  return JSZipReady || (JSZipReady = new Promise((res,rej)=>{
+    if(window.JSZip) return res(window.JSZip);
+    const el=document.createElement('script');
+    el.src='https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+    el.onload=()=>res(window.JSZip);
+    el.onerror=()=>{ JSZipReady=null; rej(new Error('could not load the zip library')); };
+    document.head.appendChild(el);
+  }));
+}
+function csvCell(v){
+  const t = v==null ? '' : String(v);
+  return /[",\n\r]/.test(t) ? '"'+t.replace(/"/g,'""')+'"' : t;
+}
+function toCSV(cols, rows){
+  // BOM keeps Excel happy with accented characters if anyone opens these first
+  return '\uFEFF' + [cols.join(',')].concat(rows.map(r=>cols.map(c=>csvCell(r[c])).join(','))).join('\r\n');
+}
+function safeFile(n){ return String(n||'untitled').replace(/[\\/:*?"<>|]/g,'-').replace(/\s+/g,' ').trim().slice(0,80); }
+/* Asana matches people by email where it can, so prefer that over a display name. */
+function asanaWho(code){ const m=TEAM[code]; return m ? (m.email || m.name) : ''; }
+function asanaSection(p,t){
+  if(isTech(p)){
+    const ms=(p.milestones||[]).find(m=>m.id===t.msId);
+    return ms ? ms.name : 'No milestone';
+  }
+  return STATUS[t.s] ? STATUS[t.s].label : 'Not Started';
+}
+/* Everything Asana's CSV importer can't carry is preserved here as text,
+   so nothing is silently lost in the move. */
+function asanaNotes(p,t){
+  ensureDetail(p,t);
+  const parts=[];
+  if(t._desc) parts.push(t._desc);
+  const up=upstreamOf(p,t);
+  if(up) parts.push('Blocked by: '+up.t);
+  else if(t.blockedBy) parts.push('Blocked by: '+t.blockedBy);
+  if(t.blocks) parts.push('Blocks: '+t.blocks);
+  if(t.recur) parts.push('Repeats: '+({weekly:'weekly',biweekly:'every 2 weeks',monthly:'monthly'}[t.recur]||t.recur));
+  if((t._sub||[]).length) parts.push('Subtasks:\n'+t._sub.map(x=>`- [${x.done?'x':' '}] ${x.t}`).join('\n'));
+  if((t._links||[]).length) parts.push('Files & links:\n'+t._links.map(l=>`- ${l.label}${l.url?' — '+l.url:''}`).join('\n'));
+  if((t._comments||[]).length) parts.push('Activity from Always On:\n'+t._comments.map(c=>`- ${teamName(c.a)}${c.w?' ('+c.w+')':''}: ${c.x}`).join('\n'));
+  if(t.s==='done') parts.push('Was marked Complete in Always On.');
+  return parts.join('\n\n');
+}
+const ASANA_COLS = ['Name','Notes','Assignee','Due Date','Section/Column','Priority','Completed','Tags'];
+function asanaRowsFor(p){
+  const order = isTech(p)
+    ? (p.milestones||[]).slice().sort((a,b)=>(a.pos||0)-(b.pos||0)).map(m=>m.name).concat(['No milestone'])
+    : ORDER.map(s=>STATUS[s].label);
+  const rank = n => { const i=order.indexOf(n); return i<0 ? 999 : i; };
+  return p.tasks.map(t=>({
+      Name: t.t,
+      Notes: asanaNotes(p,t),
+      Assignee: asanaWho(t.a),
+      'Due Date': t.due || '',
+      'Section/Column': asanaSection(p,t),
+      Priority: ({high:'High',med:'Medium',low:'Low'})[t.pr] || 'Medium',
+      Completed: t.s==='done' ? 'Yes' : 'No',
+      Tags: [isTech(p)?'Technical':'Campaign', t.s==='blocked'?'Blocked':''].filter(Boolean).join(',')
+    }))
+    // keep each section's tasks together, earliest due first — Asana imports in file order
+    .sort((a,b)=>{
+      const d=rank(a['Section/Column'])-rank(b['Section/Column']); if(d) return d;
+      if(a['Due Date']&&b['Due Date']) return a['Due Date']<b['Due Date']?-1:a['Due Date']>b['Due Date']?1:0;
+      if(a['Due Date']) return -1; if(b['Due Date']) return 1; return 0;
+    });
+}
+const SUMMARY_COLS = ['Project','Type','Status','Owner','Approval','Priority','Motion','Segment','Solution','Pipeline',
+  'Est. value','Audience','Launch','Launch date','Target date','System / Platform','Work type','Requested by',
+  'Blocker','Unblocks campaigns','Milestones','Tasks','Done','% complete','Archived'];
+function asanaSummaryRows(list){
+  return list.map(p=>{
+    const pr=progress(p), ap=approvalState(p);
+    return { Project:p.name, Type:isTech(p)?'Technical project':'Campaign',
+      Status:(STATUS_PILL[projStatus(p)]||['',''])[1], Owner:teamName(ownerOf(p)),
+      Approval: ap ? `${(APPR_PILL[ap]||['',''])[1]} (${teamName(p.approverId)})` : 'Not required',
+      Priority:(p.priority||'').toUpperCase(), Motion:p.motion||'', Segment:p.segment||'', Solution:p.solution||'',
+      Pipeline:p.pipeline||'', 'Est. value':p.value||'', Audience:p.audience||'', Launch:p.launch||'',
+      'Launch date':p.launchDate||'', 'Target date':p.targetDate||'', 'System / Platform':p.platform||'',
+      'Work type':p.workType||'', 'Requested by':p.requestedBy||'', Blocker:p.blocker||'',
+      'Unblocks campaigns':(p.unblocks||[]).map(id=>(byId(id)||{}).name).filter(Boolean).join(' · '),
+      Milestones:(p.milestones||[]).map(m=>m.name+(m.due?' ('+m.due+')':'')).join(' · '),
+      Tasks:pr.total, Done:pr.done, '% complete':pr.pct, Archived:p.archived?'Yes':'No' };
+  });
+}
+function asanaDependencyRows(list){
+  const out=[];
+  list.forEach(p=>p.tasks.forEach(t=>{
+    const up=upstreamOf(p,t);
+    if(up) out.push({Project:p.name, Task:t.t, 'Waits on':up.t, Kind:'Task dependency'});
+    else if(t.blockedBy) out.push({Project:p.name, Task:t.t, 'Waits on':t.blockedBy, Kind:'External blocker'});
+  }));
+  return out;
+}
+function asanaReadme(counts){
+  return [
+'Always On -> Asana export',
+'Generated ' + new Date().toLocaleString(),
+'',
+'WHAT IS IN HERE',
+'  Campaigns/            one CSV per campaign (' + counts.camp + ')',
+'  Technical projects/   one CSV per technical project (' + counts.tech + ')',
+'  Archived/             projects archived in Always On (' + counts.arch + ')',
+'  00 - Portfolio summary.csv    every project with its owner, dates, value and status',
+'  00 - Dependencies.csv         every "waits on" link, to recreate by hand',
+'',
+'HOW TO IMPORT ONE PROJECT',
+'  1. In Asana: + (Create) -> Project -> Import -> CSV',
+'  2. Upload one CSV from Campaigns/ or Technical projects/',
+'  3. Check the column mapping, then import. Each CSV becomes one Asana project.',
+'',
+'HOW THE COLUMNS MAP',
+'  Name             the task',
+'  Notes            description, subtasks, files, comment history and blocker notes',
+'  Assignee         work email where we have one, otherwise the person\u2019s name',
+'  Due Date         YYYY-MM-DD',
+'  Section/Column   milestone name for technical projects, status for campaigns',
+'  Priority         High / Medium / Low (Asana will offer to make this a custom field)',
+'  Completed        Yes / No (see below)',
+'',
+'THINGS ASANA\u2019S CSV IMPORTER WILL NOT DO FOR YOU',
+'  Completed tasks   The importer brings tasks in as incomplete. For campaigns they',
+'                    land in a "Complete" section, so select that section and mark the',
+'                    tasks complete in one go. The Completed column tells you which.',
+'  Subtasks          Not created automatically. They are preserved as a checklist',
+'                    inside each task\u2019s Notes, so nothing is lost.',
+'  Dependencies      Not importable. 00 - Dependencies.csv lists every one so you can',
+'                    set them in Asana afterwards.',
+'  Comments          Preserved as text at the bottom of each task\u2019s Notes.',
+'',
+'BEFORE YOU IMPORT',
+'  Make sure the people in Asana use the same email addresses shown in the Assignee',
+'  column, or Asana will not match them and the tasks will import unassigned.'
+  ].join('\n');
+}
+async function exportAllForAsana(){
+  try{
+    toast('Building the Asana export…');
+    const JSZipLib = await loadJSZip();
+    const zip = new JSZipLib();
+    const live = PROJECTS.filter(p=>!p.archived), arch = PROJECTS.filter(p=>p.archived);
+    const camps = live.filter(p=>!isTech(p)), techs = live.filter(isTech);
+
+    camps.forEach(p => zip.file('Campaigns/'+safeFile(p.name)+'.csv', toCSV(ASANA_COLS, asanaRowsFor(p))));
+    techs.forEach(p => zip.file('Technical projects/'+safeFile(p.name)+'.csv', toCSV(ASANA_COLS, asanaRowsFor(p))));
+    arch.forEach(p  => zip.file('Archived/'+safeFile(p.name)+'.csv', toCSV(ASANA_COLS, asanaRowsFor(p))));
+
+    zip.file('00 - Portfolio summary.csv', toCSV(SUMMARY_COLS, asanaSummaryRows(PROJECTS)));
+    const deps = asanaDependencyRows(PROJECTS);
+    zip.file('00 - Dependencies.csv', toCSV(['Project','Task','Waits on','Kind'], deps));
+    zip.file('README - How to import into Asana.txt',
+      asanaReadme({camp:camps.length, tech:techs.length, arch:arch.length}));
+
+    const blob = await zip.generateAsync({type:'blob'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = todayISO();
+    a.href = url; a.download = 'Always On export for Asana ' + stamp + '.zip';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 5000);
+    const total = PROJECTS.reduce((n,p)=>n+p.tasks.length,0);
+    toast(`Exported ${PROJECTS.length} projects and ${total} tasks`);
+  }catch(e){ toast('Export failed: '+e.message, true); }
+}
+
+/* ===================================================================
    Excel export (SheetJS loaded on demand from CDN)
    =================================================================== */
 let XLSXReady=null;
